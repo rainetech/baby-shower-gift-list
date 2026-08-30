@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Baby shower gift ideas for Rochelle and Christopher's little girl." />
+    <meta name="theme-color" content="#f6ccd8" />
+    <title>Rochelle & Christopher's Baby Shower</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="petals" aria-hidden="true"></div>
+
+    <main>
+      <section id="gate" class="gate-shell" aria-labelledby="gate-title">
+        <div class="gate-card">
+          <div class="pram-mark" aria-hidden="true">♡</div>
+          <p class="eyebrow">A little celebration</p>
+          <h1 id="gate-title">Rochelle <span>&</span> Christopher</h1>
+          <p class="gate-copy">We can't wait to welcome our little girl. Enter the invitation code to explore a few gift ideas chosen with love.</p>
+
+          <form id="access-form" class="access-form">
+            <label for="access-code">Invitation code</label>
+            <div class="code-row">
+              <input id="access-code" name="access-code" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" placeholder="••••" required />
+              <button type="submit">Enter</button>
+            </div>
+            <p id="access-message" class="form-message" role="status" aria-live="polite"></p>
+          </form>
+
+          <p class="tiny-note">Shared privately with our family and friends.</p>
+        </div>
+      </section>
+
+      <section id="registry" class="registry-shell" hidden>
+        <header class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Our baby shower gift ideas</p>
+            <h1>A tiny girl,<br /><em>a whole lot of love.</em></h1>
+            <p>Thank you for celebrating this beautiful new chapter with us. If you choose a gift, please reserve it below so our lovely guests don't accidentally double up.</p>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <div class="moon">☾</div>
+            <div class="cloud cloud-one"></div>
+            <div class="cloud cloud-two"></div>
+            <div class="star star-one">✦</div>
+            <div class="star star-two">✧</div>
+            <div class="star star-three">✦</div>
+          </div>
+        </header>
+
+        <section class="instructions" aria-label="How reservations work">
+          <div><span>1</span><p>Choose a gift idea</p></div>
+          <div><span>2</span><p>View it on Amazon</p></div>
+          <div><span>3</span><p>Reserve it in your name</p></div>
+        </section>
+
+        <div class="list-heading">
+          <div>
+            <p class="eyebrow">Thoughtful little things</p>
+            <h2>Gift ideas</h2>
+          </div>
+          <div id="gift-summary" class="gift-summary" aria-live="polite"></div>
+        </div>
+
+        <div id="gift-grid" class="gift-grid" aria-live="polite"></div>
+
+        <footer>
+          <div class="footer-heart">♡</div>
+          <p>With love, Rochelle & Christopher</p>
+          <small>Prices were captured from Amazon.ae when this list was prepared and may change.</small>
+        </footer>
+      </section>
+    </main>
+
+    <dialog id="reserve-dialog">
+      <form id="reserve-form" method="dialog">
+        <button type="button" class="dialog-close" aria-label="Close">×</button>
+        <p class="eyebrow">Reserve this gift</p>
+        <h2 id="dialog-gift-name"></h2>
+        <p>Leave your name so other guests know this lovely gift has been taken care of.</p>
+        <label for="guest-name">Your name</label>
+        <input id="guest-name" name="guest-name" maxlength="50" autocomplete="name" required />
+        <p id="reserve-message" class="form-message" role="status" aria-live="polite"></p>
+        <button type="submit" class="reserve-confirm">Confirm reservation</button>
+      </form>
+    </dialog>
+
+    <template id="gift-template">
+      <article class="gift-card">
+        <div class="image-wrap"><img alt="" loading="lazy" /></div>
+        <div class="gift-body">
+          <div class="gift-meta"><span class="price"></span><span class="status-pill">Available</span></div>
+          <h3></h3>
+          <p class="description"></p>
+          <div class="gift-actions">
+            <a class="amazon-link" target="_blank" rel="noopener noreferrer">View on Amazon <span>↗</span></a>
+            <button class="reserve-button" type="button">I'll get this</button>
+          </div>
+          <div class="reserved-banner" hidden><span>✓</span><p>Reserved with love by <strong></strong></p></div>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
+

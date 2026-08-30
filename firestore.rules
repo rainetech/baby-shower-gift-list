@@ -1,0 +1,23 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isRegistryGuest() {
+      return request.auth != null && request.auth.uid == "sW87PrnhWpgglLkmKHkpIIle5ET2";
+    }
+
+    match /registries/rochelle-and-christopher/reservations/{itemId} {
+      allow read: if isRegistryGuest();
+
+      allow create: if isRegistryGuest()
+        && request.resource.data.keys().hasOnly(["itemId", "name", "reservedAt"])
+        && request.resource.data.itemId == itemId
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 50
+        && request.resource.data.reservedAt == request.time;
+
+      allow update, delete: if false;
+    }
+  }
+}
