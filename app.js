@@ -3,6 +3,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword } from "https:/
 import { collection, doc, getFirestore, onSnapshot, serverTimestamp, setDoc } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 import { firebaseConfig, registryUserEmail } from "./firebase-config.js";
 import { gifts } from "./gifts-full.js";
+import { alternativePrices, priceCheckDate } from "./alternative-prices.js";
 
 const REGISTRY_ID = "rochelle-and-christopher";
 
@@ -56,6 +57,20 @@ function escapeText(value) {
   return element.textContent;
 }
 
+function priceValue(label) {
+  const match = label.match(/[\d,.]+/);
+  return match ? Number(match[0].replaceAll(",", "")) : null;
+}
+
+function comparisonLabel(amazonPrice, alternativePrice) {
+  if (amazonPrice === null) return "Alternative price";
+  const difference = Math.abs(amazonPrice - alternativePrice);
+  if (difference < 0.01) return "Same listed price";
+  return alternativePrice < amazonPrice
+    ? `Save AED ${difference.toFixed(2)} here`
+    : `Amazon is AED ${difference.toFixed(2)} less`;
+}
+
 function renderGifts() {
   giftGrid.replaceChildren();
 
@@ -68,11 +83,30 @@ function renderGifts() {
     card.dataset.giftId = gift.id;
     image.src = gift.image;
     image.alt = gift.name;
-    fragment.querySelector(".price").textContent = gift.price;
+    fragment.querySelector(".price").textContent = gift.price === "See Amazon"
+      ? gift.price
+      : `Amazon · ${gift.price}`;
     const giftHeading = fragment.querySelector("h3");
     giftHeading.textContent = gift.name;
     giftHeading.title = gift.name;
     fragment.querySelector(".description").textContent = gift.description || "";
+
+    const alternative = alternativePrices[gift.id];
+    if (alternative) {
+      const comparison = fragment.querySelector(".price-comparison");
+      const alternativeLink = fragment.querySelector(".alternative-link");
+      const savingLabel = fragment.querySelector(".saving-label");
+      const amazonPrice = priceValue(gift.price);
+
+      comparison.hidden = false;
+      alternativeLink.href = alternative.url;
+      alternativeLink.setAttribute("aria-label", `View ${gift.name} at ${alternative.retailer} for ${alternative.price}`);
+      fragment.querySelector(".retailer-name").textContent = alternative.retailer;
+      fragment.querySelector(".alternative-price").textContent = alternative.price;
+      fragment.querySelector(".price-checked").textContent = `Price checked ${priceCheckDate}`;
+      savingLabel.textContent = comparisonLabel(amazonPrice, alternative.value);
+      if (amazonPrice !== null && alternative.value < amazonPrice) comparison.classList.add("is-cheaper");
+    }
 
     const amazonLink = fragment.querySelector(".amazon-link");
     amazonLink.href = gift.amazonUrl;

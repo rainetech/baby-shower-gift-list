@@ -17,8 +17,8 @@
     <main>
       <section id="gate" class="gate-shell" aria-labelledby="gate-title">
         <div class="gate-card">
-          <div class="pram-mark" aria-hidden="true">♡</div>
-          <p class="eyebrow">A little celebration</p>
+          <div class="pram-mark ladybug-mark" aria-hidden="true">🐞</div>
+          <p class="eyebrow">A little ladybug is on her way</p>
           <h1 id="gate-title">Rochelle <span>&</span> Christopher</h1>
           <p class="gate-copy">We can't wait to welcome our little girl. Enter the invitation code to explore a few gift ideas chosen with love.</p>
 
@@ -38,25 +38,39 @@
       <section id="registry" class="registry-shell" hidden>
         <header class="hero">
           <div class="hero-copy">
-            <p class="eyebrow">Our baby shower gift ideas</p>
-            <h1>A tiny girl,<br /><em>a whole lot of love.</em></h1>
+            <p class="eyebrow">Our little ladybug's gift ideas</p>
+            <h1>Our garden<br /><em>is growing.</em></h1>
             <p>Thank you for celebrating this beautiful new chapter with us. If you choose a gift, please reserve it below so our lovely guests don't accidentally double up.</p>
           </div>
           <div class="hero-art" aria-hidden="true">
-            <div class="moon">☾</div>
-            <div class="cloud cloud-one"></div>
-            <div class="cloud cloud-two"></div>
-            <div class="star star-one">✦</div>
-            <div class="star star-two">✧</div>
-            <div class="star star-three">✦</div>
+            <div class="garden-sprig sprig-one">⌇</div>
+            <div class="garden-sprig sprig-two">⌇</div>
+            <div class="family-symbol symbol-bee"><span>🐝</span><small>our busy bee</small></div>
+            <div class="family-symbol symbol-butterfly"><span>🦋</span><small>our butterfly</small></div>
+            <div class="family-symbol symbol-ladybug"><span>🐞</span><small>our ladybug</small></div>
           </div>
         </header>
+
+        <section class="family-story" aria-labelledby="family-story-title">
+          <p class="eyebrow">Three little symbols, one growing family</p>
+          <h2 id="family-story-title">From a busy bee, to a butterfly,<br />and now a little ladybug.</h2>
+          <div class="symbol-row" aria-label="Our children's family symbols">
+            <div><span aria-hidden="true">🐝</span><p><strong>First born</strong>Our busy bee</p></div>
+            <div><span aria-hidden="true">🦋</span><p><strong>Second born</strong>Our butterfly</p></div>
+            <div class="is-new"><span aria-hidden="true">🐞</span><p><strong>On her way</strong>Our ladybug</p></div>
+          </div>
+        </section>
 
         <section class="instructions" aria-label="How reservations work">
           <div><span>1</span><p>Choose a gift idea</p></div>
           <div><span>2</span><p>View it on Amazon</p></div>
           <div><span>3</span><p>Reserve it in your name</p></div>
         </section>
+
+        <aside class="price-note">
+          <span aria-hidden="true">↘</span>
+          <div><strong>We checked UAE prices for you.</strong><p>Where the exact same product was available elsewhere, you'll see a comparison and direct retailer link. Prices are snapshots, so please confirm at checkout.</p></div>
+        </aside>
 
         <div class="list-heading">
           <div>
@@ -71,7 +85,7 @@
         <footer>
           <div class="footer-heart">♡</div>
           <p>With love, Rochelle & Christopher</p>
-          <small>Prices were captured from Amazon.ae when this list was prepared and may change.</small>
+          <small>Amazon and alternative UAE prices are snapshots and may change. Delivery charges are not included.</small>
         </footer>
       </section>
     </main>
@@ -96,6 +110,15 @@
           <div class="gift-meta"><span class="price"></span><span class="status-pill">Available</span></div>
           <h3></h3>
           <p class="description"></p>
+          <div class="price-comparison" hidden>
+            <div class="comparison-head"><span>Exact UAE match</span><strong class="saving-label"></strong></div>
+            <a class="alternative-link" target="_blank" rel="noopener noreferrer">
+              <span class="retailer-name"></span>
+              <strong class="alternative-price"></strong>
+              <span aria-hidden="true">↗</span>
+            </a>
+            <small class="price-checked"></small>
+          </div>
           <div class="gift-actions">
             <a class="amazon-link" target="_blank" rel="noopener noreferrer">View on Amazon <span>↗</span></a>
             <button class="reserve-button" type="button">I'll get this</button>
@@ -108,4 +131,3 @@
     <script type="module" src="app.js"></script>
   </body>
 </html>
-
