@@ -1,0 +1,1723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cardboard Marble Run</title>
+<meta name="description" content="A marble run built from recycled bits and pieces. Slide the maze to guide the marbles; every obstacle plays a piano note.">
+<style>
+  :root {
+    --ink: #2a1d12;
+    --tape: rgba(241, 226, 178, 0.95);
+    --paper: #f7f0de;
+    --sticky: #ffd65a;
+    --red: #d8432f;
+    --hand: "Comic Sans MS", "Chalkboard SE", "Comic Neue", "Marker Felt", "Segoe Print", "Bradley Hand", cursive;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #a87543; color: var(--ink); font-family: var(--hand);
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+  /* HUD bars sit above the canvas; the canvas layout measures them so nothing overlaps the run */
+  .bar {
+    position: fixed; left: 0; right: 0; z-index: 2;
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left));
+    pointer-events: none;
+  }
+  .bar > * { pointer-events: auto; }
+  #topbar { top: 0; justify-content: space-between; padding-top: max(10px, env(safe-area-inset-top)); }
+  #bottombar { bottom: 0; justify-content: center; flex-wrap: wrap; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+
+  /* Title: a strip of masking tape with torn ends */
+  .title {
+    margin: 0; font-size: clamp(15px, 2.6vw, 24px); font-weight: 700; white-space: nowrap;
+    padding: 5px 22px 6px; background: var(--tape); transform: rotate(-1.5deg);
+    filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.3));
+    clip-path: polygon(0 10%, 2% 0, 98% 0, 100% 14%, 98.5% 30%, 100% 48%, 98% 66%, 100% 84%, 98% 100%,
+                       2% 100%, 0 88%, 1.5% 70%, 0 52%, 2% 34%);
+  }
+  /* Score: an index card */
+  .tally {
+    display: flex; align-items: baseline; gap: 8px; padding: 4px 14px 5px;
+    font-size: clamp(13px, 2vw, 18px); white-space: nowrap;
+    background: var(--paper) repeating-linear-gradient(transparent 0 17px, rgba(80, 130, 200, 0.25) 17px 18px);
+    border-left: 3px solid rgba(216, 67, 47, 0.45); border-radius: 2px;
+    transform: rotate(1.2deg); box-shadow: 1px 2px 0 rgba(0, 0, 0, 0.25), 0 3px 6px rgba(0, 0, 0, 0.2);
+  }
+  .tally b { font-size: 1.5em; color: var(--red); min-width: 1.2em; text-align: center; }
+
+  /* Buttons: hand-cut paper with wonky corners */
+  button {
+    font: inherit; font-size: clamp(14px, 2vw, 17px); font-weight: 700; color: var(--ink);
+    padding: 9px 18px; min-height: 44px;
+    border: 2.5px solid var(--ink); border-radius: 14px 9px 13px 8px / 9px 13px 8px 12px;
+    background: var(--paper); box-shadow: 2px 3px 0 rgba(42, 29, 18, 0.55);
+    cursor: pointer; transform: rotate(var(--tilt, 0deg));
+    transition: transform 0.08s, box-shadow 0.08s;
+  }
+  button:hover { transform: rotate(var(--tilt, 0deg)) translateY(-1px); }
+  button:active { transform: rotate(var(--tilt, 0deg)) translate(2px, 2px); box-shadow: 0 1px 0 rgba(42, 29, 18, 0.55); }
+  button:focus-visible { outline: 3px dashed #1b64c9; outline-offset: 3px; }
+  #dropBtn { --tilt: -1.5deg; background: var(--sticky); }
+  #resetBtn { --tilt: 1deg; }
+  #muteBtn { --tilt: -0.5deg; min-width: 7.2em; }
+
+  /* Short landscape screens (phones on their side): HUD moves into side columns so the run gets the full height */
+  @media (orientation: landscape) and (max-height: 540px) {
+    .bar { top: 0; bottom: 0; flex-direction: column; justify-content: center; padding: 12px max(12px, env(safe-area-inset-left)); }
+    #topbar { right: auto; justify-content: flex-start; align-items: flex-start; gap: 14px; }
+    #bottombar { left: auto; flex-wrap: nowrap; padding-right: max(12px, env(safe-area-inset-right)); }
+    .title { white-space: normal; max-width: 7.5em; text-align: center; }
+    button { padding: 7px 14px; min-width: 8.5em; }
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" role="img" aria-label="Marble run. Move the pointer or drag left and right to slide the maze. Click the cardboard tube, or press Space, to drop a marble."></canvas>
+
+<header class="bar" id="topbar">
+  <h1 class="title">Cardboard Marble Run</h1>
+  <div class="tally" aria-live="polite"><span>In the cup</span> <b id="score">0</b></div>
+</header>
+
+<footer class="bar" id="bottombar">
+  <button id="dropBtn" type="button">Drop Marble</button>
+  <button id="resetBtn" type="button">Reset</button>
+  <button id="muteBtn" type="button" aria-pressed="false">&#128266; Sound on</button>
+</footer>
+
+<script>
+'use strict';
+
+/* ============================================================================
+ *  CONFIG
+ *  All physics and layout values are in "world units". The whole run is
+ *  WORLD_H units tall and is scaled to fit the space between the HUD bars.
+ * ========================================================================== */
+const MAZE_W   = 400;     // width of the sliding cardboard panel
+const MAZE_H   = 832;     // height of the panel
+const MAZE_TOP = 112;     // world y of the panel's top edge (the drop tube sits above it)
+const WORLD_H  = 1030;    // total height that must fit on screen
+const MIN_VIEW_WIDTHS = 1.7; // the screen shows at least this many panel widths, leaving room to slide
+
+const GRAVITY    = 1500;
+const MARBLE_R   = 10;
+const MAX_MARBLES = 36;
+const SUBSTEP    = 1 / 240;  // fixed physics step (4 substeps per 60 fps frame)
+const MAX_SPEED  = 1300;     // speed cap keeps marbles from tunnelling through thin straws
+const BOUNCE_MIN = 70;       // impacts slower than this don't bounce, so marbles settle and roll
+
+// The panel follows the pointer on a critically damped spring: smooth, never snapping
+const MAZE_SPRING    = 70;
+const MAZE_DAMPING   = 2 * Math.sqrt(MAZE_SPRING);
+const MAZE_MAX_SPEED = 1500;
+
+const NOTE_COOLDOWN   = 0.3;   // seconds before the same marble can replay the same obstacle
+const NEW_NOTE_IMPACT = 10;    // minimum impact speed to sound a newly touched obstacle
+const REBOUNCE_IMPACT = 90;    // a marble bouncing again on the same obstacle must hit this hard
+
+// Fixed pieces (they do not slide). x is relative to the middle of the screen.
+const TUBE = { top: 6, bottom: 96, half: 27, inner: 21 };                 // toilet paper roll
+const CUP  = { top: 962, bottom: 1016, halfTop: 42, halfBottom: 33 };     // finish cup
+
+// Physical properties per material. hw = half thickness of a strip (its collision radius).
+const MATERIALS = {
+  ramp:     { hw: 6, e: 0.25, mu: 0.10 },   // corrugated cardboard strip
+  stick:    { hw: 5, e: 0.35, mu: 0.08 },   // popsicle stick
+  halfpipe: { hw: 7, e: 0.20, mu: 0.06 },   // paper towel tube cut in half
+  straw:    { hw: 4, e: 0.45, mu: 0.05 },   // drinking straw
+  funnel:   { hw: 3, e: 0.30, mu: 0.04 },   // cut plastic bottle
+  cap:      { e: 0.62, mu: 0.05, kick: 45 },// bottle cap bumper (adds a little pop)
+  egg:      { hw: 3, e: 0.30, mu: 0.10 },   // egg carton cup walls
+  cup:      { hw: 3, e: 0.15, mu: 0.25 },
+  tube:     { hw: 2, e: 0.20, mu: 0.05 },
+};
+
+const MARBLE_COLORS = [
+  { glass: '#4f9be8', swirl: '#ff7a2e' },
+  { glass: '#e24a4a', swirl: '#ffe066' },
+  { glass: '#3fbf7f', swirl: '#ffffff' },
+  { glass: '#f2b632', swirl: '#2f6fd6' },
+  { glass: '#9b6ce0', swirl: '#7cf0c8' },
+  { glass: '#2bb3c0', swirl: '#ff5d8f' },
+  { glass: '#ff8a3d', swirl: '#3b2cc0' },
+];
+
+/* ============================================================================
+ *  LEVEL LAYOUT
+ *  Coordinates are local to the sliding panel: x 0..400, y 0..832 (y points down).
+ *  Every piece that a marble can hit has a note. Notes step down a C major
+ *  pentatonic scale (C D E G A) from top to bottom, so any route plays a tune.
+ *
+ *  Types:
+ *    ramp / stick / halfpipe : straight strip from a to b     (tape: true adds tape at both ends)
+ *    straw                   : bendy straw through pts
+ *    cap                     : round bottle cap bumper at `at`, radius r
+ *    carton                  : egg carton cups centred on x with holes poked in the bottom, one note per cup
+ *    funnel                  : plastic bottle funnel centred on x, rim at `top`, neck below
+ *    label / arrow / star    : marker doodles on the panel (decoration only)
+ *    staple / glue           : decoration only
+ * ========================================================================== */
+const LEVEL = [
+  // Row 1: a bottle cap splits marbles from the tube, then ramps carry them out to the side walls
+  { type: 'cap',      at: [201, 64],  r: 18, color: '#d8432f', note: 'C6' },
+  { type: 'ramp',     a: [178, 116],  b: [52, 160],  note: 'A5', tape: true },
+  { type: 'ramp',     a: [222, 116],  b: [348, 160], note: 'G5', tape: true },
+  { type: 'stick',    a: [10, 40],    b: [10, 250],  note: 'E5' },
+  { type: 'stick',    a: [390, 40],   b: [390, 250], note: 'E5' },
+
+  // Row 2: a ramp on the left and a paper towel half-pipe on the right tip marbles into an egg carton
+  // whose cups have holes poked through the bottom
+  { type: 'ramp',     a: [14, 232],   b: [104, 262], note: 'D5', tape: true },
+  { type: 'halfpipe', a: [386, 228],  b: [282, 262], note: 'D5', tape: true },
+  { type: 'carton',   x: 200, top: 284, spacing: 60, depth: 28, hole: 15, notes: ['C5', 'A4', 'G4'] },
+
+  // Row 3: a juice bottle funnel gathers everything into the centre
+  { type: 'funnel',   x: 200, top: 350, half: 85, neckY: 402, neckW: 34, neckLen: 22, note: 'E4' },
+
+  // Row 4: popsicle stick to the right, a bumper cap, and a lower side wall
+  { type: 'stick',    a: [176, 452],  b: [318, 492], note: 'D4', tape: true },
+  { type: 'cap',      at: [340, 530], r: 15, color: '#2f6fd6', note: 'A4' },
+  { type: 'stick',    a: [390, 420],  b: [390, 590], note: 'G4' },
+
+  // Row 5: long cardboard ramp back to the left, with a gap to jump (slow marbles drop onto a cap)
+  { type: 'ramp',     a: [386, 588],  b: [250, 618], note: 'C4', tape: true },
+  { type: 'ramp',     a: [216, 634],  b: [112, 657], note: 'A3', tape: true },
+  { type: 'cap',      at: [234, 700], r: 14, color: '#f2b632', note: 'E4' },
+
+  // Row 6: a bendy straw catches marbles flying off the ramp and feeds the last funnel
+  { type: 'straw',    pts: [[14, 600], [14, 690], [96, 744]], color: '#e0463c', note: 'G3' },
+
+  // Row 7: final funnel drops marbles out of the panel into the finish cup (if it is lined up!)
+  { type: 'funnel',   x: 200, top: 750, half: 100, neckY: 800, neckW: 34, neckLen: 20, note: 'C4' },
+
+  // Decorations: marker labels, arrows, doodles, staples and glue
+  { type: 'label', at: [200, 18],  text: '← slide me →', size: 17, rot: -0.03 },
+  { type: 'label', at: [96, 96],   text: 'whee!', size: 15, rot: -0.25 },
+  { type: 'label', at: [322, 222], text: 'paper towel tube', size: 11, rot: -0.3 },
+  { type: 'label', at: [60, 300],  text: 'egg carton', size: 13, rot: 0.12 },
+  { type: 'label', at: [330, 372], text: '(was a juice bottle)', size: 11, rot: -0.08 },
+  { type: 'label', at: [232, 590], text: 'JUMP!', size: 18, rot: -0.12, color: '#c0392b' },
+  { type: 'arrow', from: [250, 598], to: [236, 622] },
+  { type: 'arrow', from: [330, 560], to: [280, 582] },
+  { type: 'label', at: [322, 812], text: 'STEAM LAB · Room 4', size: 12, rot: -0.04 },
+  { type: 'star',  at: [56, 800], r: 11 },
+  { type: 'star',  at: [356, 118], r: 8 },
+  { type: 'label', at: [48, 380],  text: '♪ ♫', size: 20, rot: 0.1 },
+  { type: 'glue',  at: [201, 64],  r: 24 },
+  { type: 'glue',  at: [340, 530], r: 20 },
+  { type: 'glue',  at: [234, 700], r: 19 },
+  { type: 'staple', at: [10, 150],  rot: 0.1 },
+  { type: 'staple', at: [390, 140], rot: -0.08 },
+  { type: 'staple', at: [390, 505], rot: 0.05 },
+  { type: 'staple', at: [14, 640],  rot: -0.1 },
+];
+
+/* ============================================================================
+ *  UTILITIES
+ * ========================================================================== */
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// Small seeded random generator so the hand-made wobble looks the same every load
+function mulberry32(seed) {
+  return function () {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// 'A4' -> 440 Hz
+function noteFreq(name) {
+  const m = /^([A-G])([#b]?)(-?\d)$/.exec(name);
+  if (!m) return 440;
+  const semis = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+  const midi = (Number(m[3]) + 1) * 12 + semis;
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+/* ============================================================================
+ *  LEVEL BUILDER
+ *  Expands LEVEL into drawable obstacles, physics colliders and overlays.
+ * ========================================================================== */
+const MAZE = 0, FIXED = 1;   // collider bodies: the sliding panel, or fixed to the screen
+const SEG = 0, CIRCLE = 1;   // collider shapes: capsule (thick line segment) or circle
+
+const obstacles = [];  // drawable pieces; those with a note light up when played
+const colliders = [];  // physics shapes, each pointing back at its obstacle
+const overlays  = [];  // masking tape and staples, drawn over the pieces
+const decor     = [];  // marker labels, arrows, glue and pencil lines, painted onto the panel texture
+const cup = { glow: 0 };
+
+function addObstacle(kind, note, props) {
+  const ob = Object.assign({
+    id: obstacles.length, kind, note: note || null, freq: note ? noteFreq(note) : 0,
+    glow: 0, wiggle: 0, cx: 0, cy: 0,
+  }, props);
+  obstacles.push(ob);
+  return ob;
+}
+
+function addSegment(body, ob, ax, ay, bx, by, mat) {
+  const abx = bx - ax, aby = by - ay;
+  colliders.push({ shape: SEG, body, ob, ax, ay, bx, by, abx, aby,
+    len2: abx * abx + aby * aby || 1, hw: mat.hw, e: mat.e, mu: mat.mu, kick: 0 });
+}
+
+function addCircle(body, ob, x, y, r, mat) {
+  colliders.push({ shape: CIRCLE, body, ob, x, y, r, e: mat.e, mu: mat.mu, kick: mat.kick || 0 });
+}
+
+// Random offsets along an edge so strips look cut by hand with scissors
+function wobbleEdge(rnd, len, amp) {
+  const pts = [];
+  const n = Math.max(2, Math.ceil(len / 10)) + 1;
+  for (let i = 0; i < n; i++) pts.push((rnd() - 0.5) * 2 * amp);
+  return pts;
+}
+
+function addTape(rnd, x, y, ang, len, wid) {
+  const jag = [];
+  for (let i = 0; i < 8; i++) jag.push(rnd());
+  overlays.push({ kind: 'tape', x, y, ang, len, wid, jag });
+}
+
+function buildStrip(item, rnd) {
+  const mat = MATERIALS[item.type];
+  const [ax, ay] = item.a, [bx, by] = item.b;
+  const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy);
+  const ob = addObstacle(item.type, item.note, {
+    ax, ay, len, ang: Math.atan2(dy, dx), hw: mat.hw,
+    cx: (ax + bx) / 2, cy: (ay + by) / 2,
+    top: wobbleEdge(rnd, len, 0.9), bot: wobbleEdge(rnd, len, 0.9),
+    grain: [rnd(), rnd(), rnd()],
+  });
+  addSegment(MAZE, ob, ax, ay, bx, by, mat);
+  if (item.type === 'ramp') {
+    // faint pencil line where the strip was "supposed" to go
+    decor.push({ type: 'pencil', a: [ax + 2, ay + 9], b: [bx + 3, by + 11] });
+  }
+  if (item.tape) {
+    const ux = dx / len, uy = dy / len;
+    for (const [px, py, s] of [[ax, ay, 1], [bx, by, -1]]) {
+      addTape(rnd, px + ux * 11 * s, py + uy * 11 * s,
+        ob.ang + Math.PI / 2 + (rnd() - 0.5) * 0.35, mat.hw * 2 + 20, 11);
+    }
+  }
+}
+
+function buildStraw(item) {
+  const mat = MATERIALS.straw;
+  const pts = item.pts;
+  const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  const ob = addObstacle('straw', item.note, { pts, color: item.color, hw: mat.hw, cx, cy });
+  for (let i = 0; i < pts.length - 1; i++) {
+    addSegment(MAZE, ob, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], mat);
+  }
+}
+
+function buildCap(item, rnd) {
+  const [x, y] = item.at;
+  const ob = addObstacle('cap', item.note, { cx: x, cy: y, r: item.r, color: item.color, spin: rnd() * Math.PI });
+  addCircle(MAZE, ob, x, y, item.r, MATERIALS.cap);
+}
+
+function buildCarton(item, rnd) {
+  const mat = MATERIALS.egg;
+  const { x, top, spacing, depth, hole } = item;
+  const n = item.notes.length, half = spacing / 2;
+  for (let i = 0; i < n; i++) {
+    const cx = x + (i - (n - 1) / 2) * spacing;
+    const specks = [];
+    for (let k = 0; k < 14; k++) specks.push([rnd(), rnd()]);
+    const ob = addObstacle('eggcup', item.notes[i], { cx, cy: top + depth / 2, top, half, depth, hole, hw: mat.hw, specks });
+    addSegment(MAZE, ob, cx - half, top, cx - hole, top + depth, mat);   // sloping walls down to the hole
+    addSegment(MAZE, ob, cx + half, top, cx + hole, top + depth, mat);
+  }
+}
+
+function buildFunnel(item, rnd) {
+  const mat = MATERIALS.funnel;
+  const { x, top, half, neckY, neckW, neckLen } = item;
+  const nx = neckW / 2;
+  const ob = addObstacle('funnel', item.note, { x, top, half, neckY, nx, neckLen, cx: x, cy: (top + neckY) / 2 });
+  addSegment(MAZE, ob, x - half, top, x - nx, neckY, mat);            // left wall
+  addSegment(MAZE, ob, x + half, top, x + nx, neckY, mat);            // right wall
+  addSegment(MAZE, ob, x - nx, neckY, x - nx, neckY + neckLen, mat);  // neck
+  addSegment(MAZE, ob, x + nx, neckY, x + nx, neckY + neckLen, mat);
+  const slope = Math.atan2(neckY - top, half - nx);
+  addTape(rnd, x - half + 16, top + 10, -slope + Math.PI / 2 + 0.2, 26, 10);
+  addTape(rnd, x + half - 16, top + 10, slope + Math.PI / 2 - 0.2, 26, 10);
+}
+
+// The drop tube and the finish cup are fixed to the screen, not to the sliding panel.
+// Their x coordinates are relative to the middle of the screen.
+function buildFixed() {
+  const tm = MATERIALS.tube, cm = MATERIALS.cup;
+  const wx = TUBE.inner + tm.hw;
+  addSegment(FIXED, null, -wx, TUBE.top, -wx, TUBE.bottom, tm);
+  addSegment(FIXED, null,  wx, TUBE.top,  wx, TUBE.bottom, tm);
+  addSegment(FIXED, null, -CUP.halfTop, CUP.top, -CUP.halfBottom, CUP.bottom, cm);
+  addSegment(FIXED, null,  CUP.halfTop, CUP.top,  CUP.halfBottom, CUP.bottom, cm);
+  addSegment(FIXED, null, -CUP.halfBottom, CUP.bottom, CUP.halfBottom, CUP.bottom, cm);
+}
+
+function buildLevel() {
+  obstacles.length = colliders.length = overlays.length = decor.length = 0;
+  const rnd = mulberry32(20240607);
+  for (const item of LEVEL) {
+    switch (item.type) {
+      case 'ramp': case 'stick': case 'halfpipe': buildStrip(item, rnd); break;
+      case 'straw':  buildStraw(item); break;
+      case 'cap':    buildCap(item, rnd); break;
+      case 'carton': buildCarton(item, rnd); break;
+      case 'funnel': buildFunnel(item, rnd); break;
+      case 'staple': overlays.push({ kind: 'staple', x: item.at[0], y: item.at[1], ang: item.rot || 0 }); break;
+      default:       decor.push(item); // label, arrow, star, glue
+    }
+  }
+  buildFixed();
+}
+
+/* ============================================================================
+ *  AUDIO: a small piano synthesiser built from Web Audio oscillators
+ *  The AudioContext is only created after the first click, tap or key press.
+ * ========================================================================== */
+const piano = (() => {
+  let ctx = null, master = null, reverbIn = null, noiseBuf = null;
+  let muted = false, voices = 0;
+  const VOLUME = 0.55;
+
+  function init() {
+    if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    ctx = new AC();
+
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.knee.value = 12; comp.ratio.value = 4;
+    comp.attack.value = 0.003; comp.release.value = 0.2;
+    master = ctx.createGain();
+    master.gain.value = muted ? 0 : VOLUME;
+    master.connect(comp);
+    comp.connect(ctx.destination);
+
+    // Small room reverb from a generated impulse response (decaying noise)
+    const conv = ctx.createConvolver();
+    conv.buffer = makeImpulse(1.6, 3.2);
+    reverbIn = ctx.createGain();
+    reverbIn.gain.value = 0.22;
+    reverbIn.connect(conv);
+    conv.connect(master);
+
+    // Short noise burst reused as the felt hammer "thock" at the start of every note
+    noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.04), ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+  }
+
+  function makeImpulse(seconds, decay) {
+    const rate = ctx.sampleRate, len = Math.floor(rate * seconds);
+    const buf = ctx.createBuffer(2, len, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    return buf;
+  }
+
+  // One piano-like note: a few slightly stretched partials with a fast attack,
+  // a quick initial drop and a longer fade. Higher partials die away sooner,
+  // and a closing low-pass filter mellows the tone like a real string.
+  function play(freq, velocity = 0.7, delay = 0) {
+    if (!ctx || muted || voices > 24) return;
+    const t = ctx.currentTime + delay;
+    const vel = clamp(velocity, 0.05, 1);
+    const ring = clamp(2.6 - Math.log2(freq / 130) * 0.45, 0.9, 2.8); // low notes ring longer
+
+    const out = ctx.createGain();
+    out.gain.value = vel * 0.3;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = 0.6;
+    filter.frequency.setValueAtTime(Math.min(freq * 12, 14000), t);
+    filter.frequency.exponentialRampToValueAtTime(Math.max(freq * 3, 700), t + 0.5);
+    out.connect(filter);
+    filter.connect(master);
+    filter.connect(reverbIn);
+
+    // [harmonic, amplitude, detune in cents]; two detuned fundamentals mimic a piano's paired strings
+    const partials = [[1, 0.7, 1.5], [1, 0.5, -1.5], [2, 0.4, 0], [3, 0.18, 0], [4, 0.09, 0], [5, 0.05, 0]];
+    voices++;
+    partials.forEach(([n, amp, cents], i) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq * n * Math.sqrt(1 + 0.0004 * n * n); // slight stiffness stretch
+      osc.detune.value = cents;
+      const g = ctx.createGain();
+      const decay = ring / Math.pow(n, 0.7);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(amp, t + 0.004);
+      g.gain.exponentialRampToValueAtTime(amp * 0.35, t + 0.09 + 0.05 / n);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+      osc.connect(g);
+      g.connect(out);
+      osc.start(t);
+      osc.stop(t + decay + 0.05);
+      if (i === 0) osc.onended = () => { voices--; out.disconnect(); };
+    });
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = Math.min(freq * 3, 5000);
+    bp.Q.value = 1.2;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.25 * vel;
+    noise.connect(bp);
+    bp.connect(ng);
+    ng.connect(out);
+    noise.start(t);
+  }
+
+  // Little rising arpeggio when a marble lands in the finish cup
+  function fanfare() {
+    ['C5', 'E5', 'G5', 'C6'].forEach((n, i) => play(noteFreq(n), 0.55, i * 0.08));
+  }
+
+  function setMuted(m) {
+    muted = m;
+    if (master) master.gain.setTargetAtTime(m ? 0 : VOLUME, ctx.currentTime, 0.03);
+  }
+
+  return { init, play, fanfare, setMuted, get muted() { return muted; } };
+})();
+
+/* ============================================================================
+ *  PHYSICS
+ *  Marbles live in world space and are stepped with a fixed time step. The
+ *  panel is a kinematic body: it moves on its own, and every collision uses the
+ *  marble's velocity *relative to the panel*, so walls push marbles along and
+ *  friction drags them. Pieces are capsules (thick segments) or circles.
+ * ========================================================================== */
+const view = {
+  w: 0, h: 0, dpr: 1,   // canvas size in CSS pixels, device pixel ratio
+  scale: 1,             // CSS pixels per world unit
+  originY: 0,           // CSS pixel y of world y = 0
+  worldW: 1000,         // screen width in world units
+  cx: 500,              // world x of the screen middle (drop tube and finish cup)
+  bottom: WORLD_H,      // world y of the bottom edge of the screen
+};
+const maze = { x: 0, vx: 0, target: 0 };  // x = world x of the panel's left edge
+let marbles = [];
+const particles = [];
+let simTime = 0;
+let score = 0;
+let colorIndex = 0;
+const scoreEl = document.getElementById('score');
+
+function mazeBounds() {
+  const margin = 6;
+  const lo = margin, hi = view.worldW - MAZE_W - margin;
+  return hi > lo ? [lo, hi] : [(view.worldW - MAZE_W) / 2, (view.worldW - MAZE_W) / 2];
+}
+
+function setMazeTarget(x) {
+  const [lo, hi] = mazeBounds();
+  maze.target = clamp(x, lo, hi);
+}
+
+// Bounding boxes (in each body's local space) let most collider checks bail out early
+function prepColliders() {
+  const pad = MARBLE_R + 2;
+  for (const c of colliders) {
+    if (c.shape === SEG) {
+      c.minX = Math.min(c.ax, c.bx) - c.hw - pad; c.maxX = Math.max(c.ax, c.bx) + c.hw + pad;
+      c.minY = Math.min(c.ay, c.by) - c.hw - pad; c.maxY = Math.max(c.ay, c.by) + c.hw + pad;
+    } else {
+      c.minX = c.x - c.r - pad; c.maxX = c.x + c.r + pad;
+      c.minY = c.y - c.r - pad; c.maxY = c.y + c.r + pad;
+    }
+  }
+}
+
+function spawnMarble() {
+  if (marbles.length >= MAX_MARBLES) return false;
+  marbles.push({
+    x: view.cx + (Math.random() - 0.5) * 6, y: TUBE.top + 16,
+    vx: 0, vy: 60, r: MARBLE_R,
+    angle: Math.random() * Math.PI * 2, spin: 0,
+    color: MARBLE_COLORS[colorIndex++ % MARBLE_COLORS.length],
+    contactT: new Map(),  // obstacle id -> last time touched (to tell rolling from a fresh landing)
+    noteT: new Map(),     // obstacle id -> last time it played for this marble (cooldown)
+    lastOb: -1,           // obstacle that last played a note for this marble
+    still: 0, nudges: 0, done: false, doneT: 0, fade: 1, dead: false,
+    anchorX: 0, anchorY: 0,  // where it was last seen moving (panel-local), for the stuck check
+  });
+  return true;
+}
+
+// Decide whether a contact should play the obstacle's note
+function touchObstacle(m, ob, impact) {
+  if (!ob || !ob.note) return;
+  const last = m.contactT.get(ob.id);
+  m.contactT.set(ob.id, simTime);
+  if (last !== undefined && simTime - last < 0.07) return;          // still rolling on it
+  const played = m.noteT.get(ob.id);
+  if (played !== undefined && simTime - played < NOTE_COOLDOWN) return;
+  const isNew = m.lastOb !== ob.id;
+  if (impact < (isNew ? NEW_NOTE_IMPACT : REBOUNCE_IMPACT)) return;
+  m.noteT.set(ob.id, simTime);
+  m.lastOb = ob.id;
+  ob.glow = 1;
+  ob.wiggle = 1;
+  piano.play(ob.freq, 0.3 + impact / 700);                          // louder for harder hits
+  spawnNoteFloat(ob);
+}
+
+// Push the marble out along normal n, then bounce and apply friction to the relative velocity
+function resolveContact(m, nx, ny, pen, bvx, c) {
+  m.x += nx * pen;
+  m.y += ny * pen;
+  let rvx = m.vx - bvx, rvy = m.vy;
+  const vn = rvx * nx + rvy * ny;
+  if (vn >= 0) return;                               // already separating
+  const impact = -vn;
+  const e = impact > BOUNCE_MIN ? c.e : 0;           // gentle contacts don't bounce, so marbles roll
+  const jn = -(1 + e) * vn;
+  rvx += jn * nx;
+  rvy += jn * ny;
+  if (c.kick && impact > BOUNCE_MIN) { rvx += nx * c.kick; rvy += ny * c.kick; }
+  // Coulomb friction on the tangential part
+  const tx = -ny, ty = nx;
+  const vt = rvx * tx + rvy * ty;
+  const maxF = c.mu * jn;
+  const dvt = Math.abs(vt) <= maxF ? vt : Math.sign(vt) * maxF;
+  rvx -= dvt * tx;
+  rvy -= dvt * ty;
+  m.vx = rvx + bvx;
+  m.vy = rvy;
+  m.spin = (vt - dvt) / m.r;                         // visual rolling
+  touchObstacle(m, c.ob, impact);
+}
+
+function collideSegment(m, c, ox, oy, bvx) {
+  const px = m.x - ox, py = m.y - oy;
+  let t = ((px - c.ax) * c.abx + (py - c.ay) * c.aby) / c.len2;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const dx = px - (c.ax + c.abx * t), dy = py - (c.ay + c.aby * t);
+  const minD = m.r + c.hw;
+  const d2 = dx * dx + dy * dy;
+  if (d2 >= minD * minD) return;
+  const d = Math.sqrt(d2);
+  if (d < 1e-6) {                                    // dead centre on the line: push out upwards
+    const l = Math.sqrt(c.len2);
+    let nx = -c.aby / l, ny = c.abx / l;
+    if (ny > 0) { nx = -nx; ny = -ny; }
+    resolveContact(m, nx, ny, minD, bvx, c);
+    return;
+  }
+  resolveContact(m, dx / d, dy / d, minD - d, bvx, c);
+}
+
+function collideCircle(m, c, ox, oy, bvx) {
+  const dx = m.x - ox - c.x, dy = m.y - oy - c.y;
+  const minD = m.r + c.r;
+  const d2 = dx * dx + dy * dy;
+  if (d2 >= minD * minD) return;
+  const d = Math.sqrt(d2);
+  if (d < 1e-6) { resolveContact(m, 0, -1, minD, bvx, c); return; }
+  resolveContact(m, dx / d, dy / d, minD - d, bvx, c);
+}
+
+// Equal-mass marbles: split the overlap and exchange momentum along the contact normal
+function collideMarbles() {
+  for (let i = 0; i < marbles.length; i++) {
+    const a = marbles[i];
+    for (let j = i + 1; j < marbles.length; j++) {
+      const b = marbles[j];
+      const dx = b.x - a.x, dy = b.y - a.y, minD = a.r + b.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= minD * minD || d2 < 1e-9) continue;
+      const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, pen = (minD - d) / 2;
+      a.x -= nx * pen; a.y -= ny * pen;
+      b.x += nx * pen; b.y += ny * pen;
+      const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+      if (vn < 0) {
+        const e = -vn > BOUNCE_MIN ? 0.7 : 0.1;       // glassy clack
+        const jn = -(1 + e) * vn / 2;
+        a.vx -= jn * nx; a.vy -= jn * ny;
+        b.vx += jn * nx; b.vy += jn * ny;
+      }
+    }
+  }
+}
+
+// The panel chases its target on a critically damped spring
+function stepMaze(h) {
+  const [lo, hi] = mazeBounds();
+  const acc = MAZE_SPRING * (maze.target - maze.x) - MAZE_DAMPING * maze.vx;
+  maze.vx = clamp(maze.vx + acc * h, -MAZE_MAX_SPEED, MAZE_MAX_SPEED);
+  maze.x += maze.vx * h;
+  if (maze.x < lo) { maze.x = lo; if (maze.vx < 0) maze.vx = 0; }
+  if (maze.x > hi) { maze.x = hi; if (maze.vx > 0) maze.vx = 0; }
+}
+
+function physicsStep(h) {
+  simTime += h;
+  stepMaze(h);
+  for (const m of marbles) {
+    m.vy += GRAVITY * h;
+    const sp = Math.hypot(m.vx, m.vy);
+    if (sp > MAX_SPEED) { m.vx *= MAX_SPEED / sp; m.vy *= MAX_SPEED / sp; }
+    m.x += m.vx * h;
+    m.y += m.vy * h;
+    for (const c of colliders) {
+      const onMaze = c.body === MAZE;
+      const ox = onMaze ? maze.x : view.cx, oy = onMaze ? MAZE_TOP : 0;
+      const px = m.x - ox, py = m.y - oy;
+      if (px < c.minX || px > c.maxX || py < c.minY || py > c.maxY) continue;
+      if (c.shape === SEG) collideSegment(m, c, ox, oy, onMaze ? maze.vx : 0);
+      else collideCircle(m, c, ox, oy, onMaze ? maze.vx : 0);
+    }
+    m.angle += m.spin * h;
+  }
+  collideMarbles();
+}
+
+// Scoring, clean-up and the "stuck marble" rescue, once per frame
+function updateMarbles(dt) {
+  for (const m of marbles) {
+    const rx = m.x - view.cx;
+    if (!m.done && m.y > CUP.top + 8 && m.y < CUP.bottom && Math.abs(rx) < CUP.halfTop - 4) {
+      m.done = true;
+      score++;
+      scoreEl.textContent = score;
+      cup.glow = 1;
+      piano.fanfare();
+      spawnConfetti();
+    }
+    if (m.done) {
+      m.doneT += dt;
+      if (m.doneT > 1.6) m.fade -= dt * 2.5;        // settle in the cup, then fade away
+      if (m.fade <= 0) m.dead = true;
+      continue;
+    }
+    if (m.y > view.bottom + 40 || m.x < -200 || m.x > view.worldW + 200) { m.dead = true; continue; }
+    // Stuck = hasn't moved 6 units relative to the panel for 2.5 s (wedged marbles jitter, so speed alone can't tell)
+    const lx = m.x - maze.x;
+    if (Math.hypot(lx - m.anchorX, m.y - m.anchorY) > 6) { m.anchorX = lx; m.anchorY = m.y; m.still = 0; }
+    else m.still += dt;
+    if (m.still > 2.5) {                              // wedged somewhere: give it a nudge
+      m.still = 0;
+      if (++m.nudges > 3) { m.dead = true; spawnPuff(m.x, m.y); continue; }
+      m.vx += (Math.random() < 0.5 ? -1 : 1) * (60 + Math.random() * 60);
+      m.vy -= 120;
+    }
+  }
+  marbles = marbles.filter((m) => !m.dead);
+}
+
+/* ---- Little effects: floating music notes, confetti from the cup, dust puffs ---- */
+function spawnNoteFloat(ob) {
+  if (particles.length > 90) return;
+  particles.push({ kind: 'note', body: MAZE, x: ob.cx + (Math.random() - 0.5) * 18, y: ob.cy - 20,
+    vx: (Math.random() - 0.5) * 20, vy: -45, t: 0, life: 1.1, rot: (Math.random() - 0.5) * 0.5, vr: 0,
+    text: Math.random() < 0.5 ? '♪' : '♫' });
+}
+
+function spawnConfetti() {
+  const colors = ['#d8432f', '#2f6fd6', '#f2b632', '#3fbf7f', '#9b6ce0', '#ffffff'];
+  for (let i = 0; i < 22; i++) {
+    particles.push({ kind: 'confetti', body: FIXED, x: (Math.random() - 0.5) * 50, y: CUP.top + 4,
+      vx: (Math.random() - 0.5) * 260, vy: -250 - Math.random() * 250, gravity: 900,
+      t: 0, life: 1.3 + Math.random() * 0.5, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 16,
+      color: colors[i % colors.length] });
+  }
+}
+
+function spawnPuff(x, y) {
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2;
+    particles.push({ kind: 'puff', body: null, x, y, vx: Math.cos(a) * 60, vy: Math.sin(a) * 60 - 20,
+      t: 0, life: 0.6, rot: 0, vr: 0 });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.t += dt;
+    if (p.t >= p.life) { particles.splice(i, 1); continue; }
+    if (p.gravity) p.vy += p.gravity * dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.rot += p.vr * dt;
+  }
+}
+
+let accumulator = 0;
+function update(dt) {
+  accumulator += dt;
+  let steps = 0;
+  while (accumulator >= SUBSTEP && steps < 12) {
+    physicsStep(SUBSTEP);
+    accumulator -= SUBSTEP;
+    steps++;
+  }
+  if (steps === 12) accumulator = 0;                 // don't spiral after a long pause
+  updateMarbles(dt);
+  for (const ob of obstacles) {
+    if (ob.glow > 0) ob.glow = Math.max(0, ob.glow - dt * 1.6);
+    if (ob.wiggle > 0) ob.wiggle = Math.max(0, ob.wiggle - dt * 2.4);
+  }
+  cup.glow = Math.max(0, cup.glow - dt * 0.8);
+  updateParticles(dt);
+}
+
+function resetRun() {
+  marbles = [];
+  particles.length = 0;
+  score = 0;
+  scoreEl.textContent = '0';
+  for (const ob of obstacles) ob.glow = ob.wiggle = 0;
+  cup.glow = 0;
+  setMazeTarget(view.cx - MAZE_W / 2);               // glide back to the middle
+}
+
+/* ============================================================================
+ *  RENDERING: layout and static textures
+ *  The corrugated background and the maze panel (with its marker doodles) are
+ *  painted once per resize into offscreen canvases. Pieces, tape, marbles and
+ *  effects are drawn every frame on top.
+ * ========================================================================== */
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const topbar = document.getElementById('topbar');
+const bottombar = document.getElementById('bottombar');
+const HAND_FONT = '"Comic Sans MS", "Chalkboard SE", "Comic Neue", "Marker Felt", "Segoe Print", "Bradley Hand", cursive';
+const PANEL_PAD = 24;   // margin (world units) around the panel texture for its shadow
+let bgCanvas = null, panelCanvas = null, laidOut = false;
+
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  return c;
+}
+
+// '#rrggbb' lightened (amt > 0) or darkened (amt < 0)
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (c) => Math.round(amt > 0 ? c + (255 - c) * amt : c * (1 + amt));
+  return `rgb(${f(n >> 16)}, ${f((n >> 8) & 255)}, ${f(n & 255)})`;
+}
+
+// Fit WORLD_H between the HUD bars, keep the drop tube centred, and repaint textures
+function layout() {
+  const oldCx = view.cx;
+  view.w = window.innerWidth;
+  view.h = window.innerHeight;
+  view.dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(view.w * view.dpr);
+  canvas.height = Math.round(view.h * view.dpr);
+
+  const sideHud = window.matchMedia('(orientation: landscape) and (max-height: 540px)').matches;
+  const top = sideHud ? 8 : topbar.getBoundingClientRect().bottom;
+  const bottom = sideHud ? view.h - 8 : bottombar.getBoundingClientRect().top;
+  const availH = Math.max(120, bottom - top);
+  view.scale = Math.min(availH / WORLD_H, view.w / (MAZE_W * MIN_VIEW_WIDTHS));
+  view.originY = top + (availH - WORLD_H * view.scale) / 2;
+  view.worldW = view.w / view.scale;
+  view.cx = view.worldW / 2;
+  view.bottom = (view.h - view.originY) / view.scale;
+
+  if (laidOut) {
+    const shift = view.cx - oldCx;              // keep the panel and marbles in place relative to the tube
+    maze.x += shift;
+    for (const m of marbles) m.x += shift;
+    setMazeTarget(maze.target + shift);
+    const [lo, hi] = mazeBounds();
+    maze.x = clamp(maze.x, lo, hi);
+  } else {
+    maze.x = view.cx - MAZE_W / 2;
+    setMazeTarget(maze.x);
+    laidOut = true;
+  }
+  buildBackground();
+  buildPanel();
+}
+
+// Corrugated cardboard: warm brown, vertical ridges, fibres, a few stains and faded box printing
+function buildBackground() {
+  const W = canvas.width, H = canvas.height, d = view.dpr;
+  bgCanvas = makeCanvas(W, H);
+  const g = bgCanvas.getContext('2d');
+  const rnd = mulberry32(99);
+
+  const base = g.createLinearGradient(0, 0, 0, H);
+  base.addColorStop(0, '#bb8952');
+  base.addColorStop(1, '#a7733e');
+  g.fillStyle = base;
+  g.fillRect(0, 0, W, H);
+
+  const p = Math.max(6, Math.round(9 * d));    // ridge spacing in device pixels
+  const tile = makeCanvas(p, 1);
+  const tg = tile.getContext('2d');
+  const rg = tg.createLinearGradient(0, 0, p, 0);
+  rg.addColorStop(0, 'rgba(255, 225, 170, 0.08)');
+  rg.addColorStop(0.35, 'rgba(255, 232, 185, 0.22)');
+  rg.addColorStop(0.65, 'rgba(90, 50, 15, 0.08)');
+  rg.addColorStop(1, 'rgba(80, 45, 12, 0.2)');
+  tg.fillStyle = rg;
+  tg.fillRect(0, 0, p, 1);
+  g.fillStyle = g.createPattern(tile, 'repeat');
+  g.fillRect(0, 0, W, H);
+
+  const specks = Math.round((W * H) / 900);
+  for (let i = 0; i < specks; i++) {
+    g.fillStyle = rnd() < 0.55 ? 'rgba(70, 40, 10, 0.13)' : 'rgba(255, 235, 200, 0.1)';
+    g.fillRect(rnd() * W, rnd() * H, (1 + rnd() * 2.5) * d, (0.5 + rnd()) * d);
+  }
+  for (let i = 0; i < 5; i++) {                // coffee-cup rings and damp patches
+    const x = rnd() * W, y = rnd() * H, r = (50 + rnd() * 120) * d;
+    const st = g.createRadialGradient(x, y, r * 0.2, x, y, r);
+    st.addColorStop(0, 'rgba(90, 55, 20, 0)');
+    st.addColorStop(0.85, 'rgba(90, 55, 20, 0.07)');
+    st.addColorStop(1, 'rgba(90, 55, 20, 0)');
+    g.fillStyle = st;
+    g.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  const print = (text, x, y, size, rot, color) => {
+    g.save();
+    g.translate(x, y);
+    g.rotate(rot);
+    g.font = `bold ${size * d}px Impact, "Arial Black", sans-serif`;
+    g.fillStyle = color;
+    g.fillText(text, 0, 0);
+    g.restore();
+  };
+  print('THIS SIDE UP ↑↑', W * 0.04, H * 0.9, 34, -0.03, 'rgba(60, 30, 5, 0.12)');
+  print('♻ PLEASE RECYCLE', W * 0.72, H * 0.2, 26, 0.02, 'rgba(60, 30, 5, 0.1)');
+  print('FRAGILE', W * 0.8, H * 0.72, 40, -0.06, 'rgba(150, 30, 20, 0.1)');
+
+  const v = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) * 0.6);
+  v.addColorStop(0, 'rgba(40, 20, 5, 0)');
+  v.addColorStop(1, 'rgba(40, 20, 5, 0.35)');
+  g.fillStyle = v;
+  g.fillRect(0, 0, W, H);
+}
+
+// The panel: a flattened box with hand-cut edges, a fold crease, glue, pencil lines and marker doodles
+function buildPanel() {
+  const s = view.scale * view.dpr;
+  panelCanvas = makeCanvas((MAZE_W + PANEL_PAD * 2) * s, (MAZE_H + PANEL_PAD * 2) * s);
+  const g = panelCanvas.getContext('2d');
+  g.setTransform(s, 0, 0, s, PANEL_PAD * s, PANEL_PAD * s);
+  const rnd = mulberry32(4242);
+
+  const pts = [], step = 24, j = () => (rnd() - 0.5) * 2.6;
+  for (let x = 0; x <= MAZE_W; x += step) pts.push([x, j()]);
+  for (let y = step; y <= MAZE_H; y += step) pts.push([MAZE_W + j(), y]);
+  for (let x = MAZE_W - step; x >= 0; x -= step) pts.push([x, MAZE_H + j()]);
+  for (let y = MAZE_H - step; y > 0; y -= step) pts.push([j(), y]);
+  const outline = new Path2D();
+  pts.forEach(([x, y], i) => (i ? outline.lineTo(x, y) : outline.moveTo(x, y)));
+  outline.closePath();
+
+  g.save();
+  g.shadowColor = 'rgba(40, 20, 5, 0.45)';
+  g.shadowBlur = 14 * s;
+  g.shadowOffsetX = 5 * s;
+  g.shadowOffsetY = 8 * s;
+  g.fillStyle = '#d8b988';
+  g.fill(outline);
+  g.restore();
+
+  g.save();
+  g.clip(outline);
+  const sheen = g.createLinearGradient(0, 0, MAZE_W, MAZE_H);
+  sheen.addColorStop(0, 'rgba(255, 242, 212, 0.28)');
+  sheen.addColorStop(1, 'rgba(120, 80, 30, 0.14)');
+  g.fillStyle = sheen;
+  g.fillRect(0, 0, MAZE_W, MAZE_H);
+  g.lineWidth = 0.5;
+  for (let i = 0; i < 1500; i++) {             // paper fibres
+    const x = rnd() * MAZE_W, y = rnd() * MAZE_H, a = rnd() * Math.PI, l = 2 + rnd() * 5;
+    g.strokeStyle = rnd() < 0.6 ? 'rgba(110, 70, 30, 0.1)' : 'rgba(255, 245, 225, 0.2)';
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l);
+    g.stroke();
+  }
+  g.lineWidth = 1.3;                             // fold crease from its life as a box
+  g.strokeStyle = 'rgba(90, 55, 20, 0.2)';
+  g.beginPath(); g.moveTo(0, 548); g.lineTo(MAZE_W, 552); g.stroke();
+  g.strokeStyle = 'rgba(255, 240, 210, 0.3)';
+  g.beginPath(); g.moveTo(0, 550); g.lineTo(MAZE_W, 554); g.stroke();
+  g.restore();
+
+  g.strokeStyle = 'rgba(80, 50, 20, 0.35)';
+  g.lineWidth = 0.8;
+  g.stroke(outline);
+
+  for (const d of decor) drawDecor(g, d, rnd);
+}
+
+function drawDecor(g, d, rnd) {
+  g.save();
+  g.lineCap = g.lineJoin = 'round';
+  if (d.type === 'pencil') {
+    g.strokeStyle = 'rgba(70, 70, 85, 0.2)';
+    g.lineWidth = 0.8;
+    g.beginPath(); g.moveTo(d.a[0], d.a[1]); g.lineTo(d.b[0], d.b[1]); g.stroke();
+    for (const [x, y] of [d.a, d.b]) { g.beginPath(); g.moveTo(x - 3, y - 3); g.lineTo(x + 3, y + 3); g.stroke(); }
+  } else if (d.type === 'label') {
+    g.translate(d.at[0], d.at[1]);
+    g.rotate(d.rot || 0);
+    g.font = `bold ${d.size || 14}px ${HAND_FONT}`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = d.color || '#2a1d12';
+    g.globalAlpha = 0.85;
+    g.fillText(d.text, 0, 0);
+    g.globalAlpha = 0.35;                        // second pass slightly offset: uneven marker ink
+    g.fillText(d.text, 0.5, 0.4);
+  } else if (d.type === 'arrow') {
+    const [x0, y0] = d.from, [x1, y1] = d.to;
+    const mx = (x0 + x1) / 2 + (y1 - y0) * 0.2, my = (y0 + y1) / 2 - (x1 - x0) * 0.2;
+    g.strokeStyle = 'rgba(42, 29, 18, 0.8)';
+    g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo(mx, my, x1, y1); g.stroke();
+    const a = Math.atan2(y1 - my, x1 - mx);
+    g.beginPath();
+    g.moveTo(x1 - Math.cos(a - 0.5) * 8, y1 - Math.sin(a - 0.5) * 8);
+    g.lineTo(x1, y1);
+    g.lineTo(x1 - Math.cos(a + 0.45) * 8, y1 - Math.sin(a + 0.45) * 8);
+    g.stroke();
+  } else if (d.type === 'star') {                 // gold star sticker from the teacher
+    g.translate(d.at[0], d.at[1]);
+    g.rotate(rnd() * 0.6);
+    g.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2 - Math.PI / 2, r = i % 2 ? d.r * 0.45 : d.r;
+      g.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    g.closePath();
+    g.fillStyle = '#f2c230';
+    g.fill();
+    g.strokeStyle = 'rgba(150, 100, 10, 0.7)';
+    g.lineWidth = 0.8;
+    g.stroke();
+  } else if (d.type === 'glue') {                 // dried hot-glue blob under a bumper
+    g.translate(d.at[0], d.at[1]);
+    g.beginPath();
+    for (let i = 0; i <= 12; i++) {
+      const a = (i / 12) * Math.PI * 2, r = d.r * (0.85 + rnd() * 0.25);
+      g.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    g.closePath();
+    g.fillStyle = 'rgba(255, 252, 235, 0.35)';
+    g.fill();
+    g.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+    g.lineWidth = 1;
+    g.stroke();
+  }
+  g.restore();
+}
+
+/* ============================================================================
+ *  RENDERING: the pieces (drawn every frame so they can glow and wiggle)
+ *  Drawn in panel-local world units.
+ * ========================================================================== */
+function capsulePath(g, L, hw) {
+  g.beginPath();
+  g.arc(0, 0, hw, Math.PI / 2, Math.PI * 1.5);
+  g.lineTo(L, -hw);
+  g.arc(L, 0, hw, -Math.PI / 2, Math.PI / 2);
+  g.closePath();
+}
+
+// Soft warm light behind a piece that just played its note
+function drawHalo(g, ob) {
+  const s = view.scale * view.dpr;
+  g.save();
+  g.shadowColor = `rgba(255, 225, 110, ${ob.glow})`;
+  g.shadowBlur = 18 * ob.glow * s;
+  g.strokeStyle = g.fillStyle = `rgba(255, 240, 150, ${0.55 * ob.glow})`;
+  g.lineCap = g.lineJoin = 'round';
+  g.beginPath();
+  if (ob.kind === 'cap') {
+    g.arc(ob.cx, ob.cy, ob.r + 5, 0, Math.PI * 2);
+    g.fill();
+  } else {
+    g.lineWidth = (ob.hw || 3) * 2 + 10;
+    if (ob.kind === 'straw') {
+      ob.pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+    } else if (ob.kind === 'eggcup') {
+      g.moveTo(ob.cx - ob.half, ob.top); g.lineTo(ob.cx - ob.hole, ob.top + ob.depth);
+      g.moveTo(ob.cx + ob.half, ob.top); g.lineTo(ob.cx + ob.hole, ob.top + ob.depth);
+    } else if (ob.kind === 'funnel') {
+      g.moveTo(ob.x - ob.half, ob.top); g.lineTo(ob.x - ob.nx, ob.neckY); g.lineTo(ob.x - ob.nx, ob.neckY + ob.neckLen);
+      g.moveTo(ob.x + ob.half, ob.top); g.lineTo(ob.x + ob.nx, ob.neckY); g.lineTo(ob.x + ob.nx, ob.neckY + ob.neckLen);
+    } else {
+      g.moveTo(ob.ax, ob.ay);
+      g.lineTo(ob.ax + Math.cos(ob.ang) * ob.len, ob.ay + Math.sin(ob.ang) * ob.len);
+    }
+    g.stroke();
+  }
+  g.restore();
+}
+
+function drawObstacle(g, ob, t) {
+  if (ob.glow > 0.01) drawHalo(g, ob);
+  g.save();
+  if (ob.wiggle > 0) {                           // a quick wobble about the piece's centre
+    const a = Math.sin(t * 38 + ob.id) * 0.045 * ob.wiggle;
+    g.translate(ob.cx, ob.cy); g.rotate(a); g.translate(-ob.cx, -ob.cy);
+  }
+  g.lineCap = g.lineJoin = 'round';
+  switch (ob.kind) {
+    case 'ramp': drawCardboard(g, ob); break;
+    case 'stick': drawStick(g, ob); break;
+    case 'halfpipe': drawHalfpipe(g, ob); break;
+    case 'straw': drawStraw(g, ob); break;
+    case 'cap': drawCap(g, ob); break;
+    case 'eggcup': drawEggCup(g, ob); break;
+    case 'funnel': drawFunnel(g, ob); break;
+  }
+  g.restore();
+}
+
+// Hand-cut outline along a strip: wobbly long edges from the prepared offsets
+function stripPath(g, ob, ext) {
+  const n = ob.top.length, L = ob.len, hw = ob.hw;
+  const xAt = (i) => -ext + ((L + ext * 2) * i) / (n - 1);
+  g.beginPath();
+  for (let i = 0; i < n; i++) g.lineTo(xAt(i), -hw + ob.top[i] * 0.6);
+  for (let i = n - 1; i >= 0; i--) g.lineTo(xAt(i), hw + ob.bot[i] * 0.6);
+  g.closePath();
+}
+
+function drawCardboard(g, ob) {
+  const L = ob.len, hw = ob.hw;
+  g.translate(ob.ax, ob.ay);
+  g.rotate(ob.ang);
+  stripPath(g, ob, hw * 0.7);
+  g.fillStyle = '#c4925a';
+  g.fill();
+  g.strokeStyle = 'rgba(80, 45, 15, 0.6)';
+  g.lineWidth = 1;
+  g.stroke();
+  g.save();
+  g.clip();
+  g.fillStyle = 'rgba(95, 55, 20, 0.18)';        // shadowed flute channel between the liners
+  g.fillRect(-hw, -hw * 0.55, L + hw * 2, hw * 1.1);
+  g.beginPath();                                 // the wavy corrugation visible on the cut edge
+  for (let x = -hw; x <= L + hw; x += 1.5) g.lineTo(x, Math.sin(x * 0.9) * hw * 0.5);
+  g.strokeStyle = 'rgba(110, 65, 25, 0.75)';
+  g.lineWidth = 0.9;
+  g.stroke();
+  g.fillStyle = 'rgba(255, 236, 200, 0.35)';     // light top liner
+  g.fillRect(-hw, -hw, L + hw * 2, hw * 0.35);
+  g.restore();
+}
+
+function drawStick(g, ob) {
+  const L = ob.len, hw = ob.hw;
+  g.translate(ob.ax, ob.ay);
+  g.rotate(ob.ang);
+  capsulePath(g, L, hw);
+  const wood = g.createLinearGradient(0, -hw, 0, hw);
+  wood.addColorStop(0, '#f5dfae');
+  wood.addColorStop(1, '#d6ad6c');
+  g.fillStyle = wood;
+  g.fill();
+  g.strokeStyle = 'rgba(120, 80, 30, 0.6)';
+  g.lineWidth = 0.8;
+  g.stroke();
+  g.strokeStyle = 'rgba(150, 100, 40, 0.35)';    // wood grain
+  g.lineWidth = 0.6;
+  ob.grain.forEach((k, i) => {
+    const y = (k - 0.5) * hw * 1.3;
+    g.beginPath();
+    g.moveTo(hw * 0.4, y);
+    g.quadraticCurveTo(L * (0.3 + i * 0.2), y + (k - 0.5) * 3, L - hw * 0.4, y + (k - 0.5) * 2);
+    g.stroke();
+  });
+}
+
+function drawHalfpipe(g, ob) {
+  const L = ob.len, hw = ob.hw;
+  g.translate(ob.ax, ob.ay);
+  g.rotate(ob.ang);
+  stripPath(g, ob, 2);
+  const body = g.createLinearGradient(0, -hw, 0, hw);
+  body.addColorStop(0, '#8a7050');                // looking into the curved inside
+  body.addColorStop(0.35, '#b79d74');
+  body.addColorStop(0.6, '#d9c6a1');
+  body.addColorStop(1, '#a88e66');
+  g.fillStyle = body;
+  g.fill();
+  g.strokeStyle = 'rgba(80, 60, 35, 0.6)';
+  g.lineWidth = 0.9;
+  g.stroke();
+  g.save();
+  g.clip();
+  g.strokeStyle = 'rgba(95, 72, 42, 0.45)';       // spiral seams of the tube
+  g.lineWidth = 0.9;
+  for (let x = -10; x < L + 10; x += 26) {
+    g.beginPath(); g.moveTo(x, -hw); g.lineTo(x + 12, hw); g.stroke();
+  }
+  g.strokeStyle = 'rgba(255, 245, 220, 0.5)';     // cut rim catching the light
+  g.lineWidth = 1.2;
+  g.beginPath(); g.moveTo(-2, -hw + 1); g.lineTo(L + 2, -hw + 1); g.stroke();
+  g.restore();
+  g.strokeStyle = 'rgba(80, 60, 35, 0.55)';
+  g.lineWidth = 0.9;
+  for (const x of [0, L]) { g.beginPath(); g.ellipse(x, 0, 2.5, hw, 0, 0, Math.PI * 2); g.stroke(); }
+}
+
+function drawStraw(g, ob) {
+  const hw = ob.hw, pts = ob.pts;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[i + 1];
+    const L = Math.hypot(x1 - x0, y1 - y0);
+    g.save();
+    g.translate(x0, y0);
+    g.rotate(Math.atan2(y1 - y0, x1 - x0));
+    capsulePath(g, L, hw);
+    g.fillStyle = '#fbf6ee';
+    g.fill();
+    g.save();
+    g.clip();
+    g.fillStyle = ob.color;                       // candy stripes
+    for (let x = -hw * 2; x < L + hw * 2; x += 8) {
+      g.beginPath();
+      g.moveTo(x, -hw); g.lineTo(x + 4, -hw); g.lineTo(x + 1, hw); g.lineTo(x - 3, hw);
+      g.closePath();
+      g.fill();
+    }
+    const shine = g.createLinearGradient(0, -hw, 0, hw);
+    shine.addColorStop(0, 'rgba(255, 255, 255, 0.55)');
+    shine.addColorStop(0.45, 'rgba(255, 255, 255, 0)');
+    shine.addColorStop(1, 'rgba(0, 0, 0, 0.18)');
+    g.fillStyle = shine;
+    g.fillRect(-hw, -hw, L + hw * 2, hw * 2);
+    g.restore();
+    capsulePath(g, L, hw);
+    g.strokeStyle = 'rgba(120, 40, 30, 0.45)';
+    g.lineWidth = 0.7;
+    g.stroke();
+    g.restore();
+  }
+  for (let i = 1; i < pts.length - 1; i++) {      // accordion ridges at each bend
+    const [px, py] = pts[i];
+    const a0 = Math.atan2(py - pts[i - 1][1], px - pts[i - 1][0]);
+    const a1 = Math.atan2(pts[i + 1][1] - py, pts[i + 1][0] - px);
+    const a = (a0 + a1) / 2;
+    g.save();
+    g.translate(px, py);
+    g.rotate(a);
+    g.strokeStyle = 'rgba(150, 50, 40, 0.65)';
+    g.lineWidth = 0.9;
+    for (let k = -3; k <= 3; k += 2) {
+      g.beginPath(); g.moveTo(k * 1.4, -hw - 0.5); g.lineTo(k * 1.4, hw + 0.5); g.stroke();
+    }
+    g.restore();
+  }
+}
+
+function drawCap(g, ob) {
+  const r = ob.r;
+  g.translate(ob.cx, ob.cy);
+  g.fillStyle = 'rgba(40, 20, 5, 0.25)';          // contact shadow
+  g.beginPath(); g.arc(1.5, 2.5, r, 0, Math.PI * 2); g.fill();
+  g.save();
+  g.rotate(ob.spin);
+  const teeth = 22;                               // crimped / ridged rim
+  g.beginPath();
+  for (let i = 0; i < teeth * 2; i++) {
+    const a = (i / (teeth * 2)) * Math.PI * 2, rr = i % 2 ? r : r - 1.7;
+    g.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  g.closePath();
+  g.fillStyle = ob.color;
+  g.fill();
+  g.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+  g.lineWidth = 0.8;
+  g.stroke();
+  const face = g.createRadialGradient(-r * 0.25, -r * 0.3, r * 0.1, 0, 0, r * 0.75);
+  face.addColorStop(0, shade(ob.color, 0.35));
+  face.addColorStop(1, shade(ob.color, -0.08));
+  g.fillStyle = face;
+  g.beginPath(); g.arc(0, 0, r * 0.74, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+  g.stroke();
+  g.strokeStyle = 'rgba(255, 255, 255, 0.3)';     // embossed ring
+  g.beginPath(); g.arc(0, 0, r * 0.42, 0, Math.PI * 2); g.stroke();
+  g.restore();
+  g.strokeStyle = 'rgba(255, 255, 255, 0.6)';     // highlight stays put while the cap wiggles
+  g.lineWidth = 1.6;
+  g.beginPath(); g.arc(0, 0, r * 0.6, -2.7, -1.5); g.stroke();
+}
+
+// Egg carton cup seen from the side: moulded pulp walls, a shadowy inside, and a poked-through hole
+function eggCupWalls(g, ob) {
+  const { cx, top, half, depth, hole } = ob;
+  g.beginPath();
+  g.moveTo(cx - half, top); g.lineTo(cx - hole, top + depth);
+  g.moveTo(cx + half, top); g.lineTo(cx + hole, top + depth);
+}
+
+function drawEggCup(g, ob) {
+  const { cx, top, half, depth, hole } = ob, b = top + depth;
+  g.fillStyle = '#cfc5b2';                        // moulded pulp shell, bulging outwards below the rim
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(cx + sd * half, top - 1);
+    g.quadraticCurveTo(cx + sd * (half + 3), b + 1, cx + sd * (hole + 5), b + 5);
+    g.lineTo(cx + sd * hole, b + 3);
+    g.lineTo(cx + sd * hole, b);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = 'rgba(95, 85, 70, 0.55)';
+    g.lineWidth = 0.8;
+    g.stroke();
+  }
+  g.beginPath();                                  // the shadowy inside of the cup
+  g.moveTo(cx - half, top);
+  g.lineTo(cx - hole, b);
+  g.lineTo(cx + hole, b);
+  g.lineTo(cx + half, top);
+  g.closePath();
+  const inside = g.createLinearGradient(0, top, 0, b);
+  inside.addColorStop(0, 'rgba(150, 138, 118, 0.35)');
+  inside.addColorStop(1, 'rgba(85, 74, 58, 0.6)');
+  g.fillStyle = inside;
+  g.fill();
+  g.fillStyle = 'rgba(40, 30, 20, 0.75)';         // the hole poked through the bottom
+  g.beginPath(); g.ellipse(cx, b, hole - 2, 3, 0, 0, Math.PI * 2); g.fill();
+  eggCupWalls(g, ob); g.strokeStyle = 'rgba(95, 85, 70, 0.7)'; g.lineWidth = 6.5; g.stroke();
+  eggCupWalls(g, ob); g.strokeStyle = '#ddd5c4'; g.lineWidth = 4.5; g.stroke();
+  g.fillStyle = 'rgba(110, 100, 85, 0.45)';       // pulp flecks
+  for (const [a, k] of ob.specks) {
+    const sd = a < 0.5 ? -1 : 1;
+    g.fillRect(cx + sd * (lerp(half, hole, k) + 2), top + depth * k, 1.2, 0.9);
+  }
+  g.strokeStyle = 'rgba(70, 60, 45, 0.7)';        // torn edges around the hole
+  g.lineWidth = 0.9;
+  for (const sd of [-1, 1]) {
+    const hx = cx + sd * hole;
+    g.beginPath();
+    g.moveTo(hx + sd * 1, b - 1); g.lineTo(hx - sd * 2.5, b + 2.5); g.lineTo(hx + sd * 1.5, b + 3.5);
+    g.stroke();
+  }
+}
+
+function drawFunnel(g, ob) {
+  const { x, top, half, neckY, nx, neckLen } = ob;
+  const bottom = neckY + neckLen;
+  g.beginPath();                                  // clear plastic body
+  g.moveTo(x - half, top); g.lineTo(x - nx, neckY); g.lineTo(x - nx, bottom);
+  g.lineTo(x + nx, bottom); g.lineTo(x + nx, neckY); g.lineTo(x + half, top);
+  g.closePath();
+  g.fillStyle = 'rgba(180, 228, 238, 0.28)';
+  g.fill();
+  g.strokeStyle = 'rgba(60, 120, 140, 0.4)';      // back edge of the cut rim
+  g.lineWidth = 1.2;
+  g.beginPath(); g.ellipse(x, top, half, 5, 0, Math.PI, Math.PI * 2); g.stroke();
+  const walls = () => {
+    g.beginPath();
+    g.moveTo(x - half, top); g.lineTo(x - nx, neckY); g.lineTo(x - nx, bottom);
+    g.moveTo(x + half, top); g.lineTo(x + nx, neckY); g.lineTo(x + nx, bottom);
+  };
+  walls(); g.strokeStyle = 'rgba(55, 115, 135, 0.75)'; g.lineWidth = 6; g.stroke();
+  walls(); g.strokeStyle = 'rgba(205, 240, 248, 0.9)'; g.lineWidth = 3.4; g.stroke();
+  g.strokeStyle = 'rgba(55, 115, 135, 0.7)';      // screw threads on the neck
+  g.lineWidth = 1.4;
+  for (let k = 0; k < 3; k++) {
+    const y = neckY + 4 + k * 5.5;
+    g.beginPath(); g.moveTo(x - nx - 4, y); g.lineTo(x - nx + 2, y + 1.5); g.stroke();
+    g.beginPath(); g.moveTo(x + nx + 4, y); g.lineTo(x + nx - 2, y + 1.5); g.stroke();
+  }
+  g.strokeStyle = 'rgba(255, 255, 255, 0.65)';    // shine
+  g.lineWidth = 2;
+  g.beginPath(); g.moveTo(x - half + 12, top + 5); g.lineTo(x - nx - 3, neckY - 6); g.stroke();
+}
+
+function drawTape(g, o) {
+  const l = o.len / 2, w = o.wid / 2, j = o.jag;
+  g.save();
+  g.translate(o.x, o.y);
+  g.rotate(o.ang);
+  g.beginPath();
+  g.moveTo(-l, -w);
+  g.lineTo(l, -w);
+  g.lineTo(l + j[0] * 2 - 1, -w * 0.4); g.lineTo(l - j[1] * 1.5, 0.3); g.lineTo(l + j[2] * 2 - 1, w * 0.5);
+  g.lineTo(l, w);
+  g.lineTo(-l, w);
+  g.lineTo(-l - j[3] * 2 + 1, w * 0.4); g.lineTo(-l + j[4] * 1.5, -0.3); g.lineTo(-l - j[5] * 2 + 1, -w * 0.5);
+  g.closePath();
+  g.fillStyle = 'rgba(238, 222, 170, 0.86)';
+  g.fill();
+  g.strokeStyle = 'rgba(160, 130, 70, 0.35)';
+  g.lineWidth = 0.6;
+  g.stroke();
+  g.strokeStyle = 'rgba(255, 255, 240, 0.4)';     // crinkle
+  g.beginPath(); g.moveTo(-l * 0.6, -w * 0.5); g.lineTo(l * (j[6] - 0.3), w * 0.5); g.stroke();
+  g.restore();
+}
+
+function drawStaple(g, o) {
+  g.save();
+  g.translate(o.x, o.y);
+  g.rotate(o.ang);
+  for (const dy of [-2.2, 2.2]) {
+    g.fillStyle = 'rgba(40, 30, 20, 0.35)';
+    g.fillRect(-5, dy - 0.4, 10, 1.9);
+    g.fillStyle = '#c9ccd1';
+    g.fillRect(-5.2, dy - 1, 10.4, 1.6);
+    g.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    g.fillRect(-4.5, dy - 0.9, 8, 0.5);
+  }
+  g.restore();
+}
+
+/* ============================================================================
+ *  RENDERING: marbles, the fixed tube and cup, effects, and the frame
+ * ========================================================================== */
+let tubePulse = 0, tubeHover = false, hintAlpha = 1, dropped = false;
+
+function drawMarble(g, m) {
+  const r = m.r;
+  g.save();
+  g.globalAlpha = clamp(m.fade, 0, 1);
+  g.translate(m.x, m.y);
+  g.fillStyle = 'rgba(40, 20, 5, 0.28)';          // shadow on the board behind
+  g.beginPath(); g.ellipse(2.5, 3.5, r * 0.95, r * 0.85, 0, 0, Math.PI * 2); g.fill();
+  const body = g.createRadialGradient(-r * 0.35, -r * 0.4, r * 0.1, 0, 0, r);
+  body.addColorStop(0, shade(m.color.glass, 0.55));
+  body.addColorStop(0.55, m.color.glass);
+  body.addColorStop(1, shade(m.color.glass, -0.45));
+  g.fillStyle = body;
+  g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.fill();
+  g.save();                                       // cat's-eye swirl that turns as the marble rolls
+  g.clip();
+  g.rotate(m.angle);
+  g.fillStyle = m.color.swirl;
+  g.globalAlpha *= 0.85;
+  for (let k = 0; k < 3; k++) {
+    g.rotate((Math.PI * 2) / 3);
+    g.beginPath();
+    g.moveTo(0, 0);
+    g.quadraticCurveTo(r * 0.6, -r * 0.4, r * 0.95, r * 0.12);
+    g.quadraticCurveTo(r * 0.45, r * 0.02, 0, 0);
+    g.fill();
+  }
+  g.restore();
+  g.fillStyle = 'rgba(255, 255, 255, 0.85)';      // glossy highlights (these don't rotate)
+  g.beginPath(); g.ellipse(-r * 0.38, -r * 0.42, r * 0.32, r * 0.19, -0.7, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(255, 255, 255, 0.3)';
+  g.beginPath(); g.arc(r * 0.38, r * 0.45, r * 0.13, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = 'rgba(0, 0, 0, 0.25)';
+  g.lineWidth = 0.6;
+  g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.stroke();
+  g.restore();
+}
+
+function markerText(g, text, x, y, size, rot, color) {
+  g.save();
+  g.translate(x, y);
+  g.rotate(rot);
+  g.font = `bold ${size}px ${HAND_FONT}`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillStyle = color || '#2a1d12';
+  g.fillText(text, 0, 0);
+  g.restore();
+}
+
+// Toilet paper roll drop tube, fixed at the top middle of the screen
+function drawTube(g) {
+  const { top, bottom, half } = TUBE;
+  const squash = 1 + Math.sin(tubePulse * Math.PI) * 0.06;
+  g.save();
+  g.translate(view.cx, 0);
+  g.scale(squash, 1 / squash);
+  g.fillStyle = 'rgba(40, 20, 5, 0.25)';
+  g.fillRect(-half + 4, top + 6, half * 2, bottom - top);
+  const body = g.createLinearGradient(-half, 0, half, 0);
+  body.addColorStop(0, '#957d5b');
+  body.addColorStop(0.3, '#d5c29f');
+  body.addColorStop(0.55, '#e4d4b4');
+  body.addColorStop(1, '#8a7252');
+  const shape = new Path2D();
+  shape.moveTo(-half, top);
+  shape.lineTo(-half, bottom);
+  shape.ellipse(0, bottom, half, 6, 0, Math.PI, 0, true);
+  shape.lineTo(half, top);
+  shape.closePath();
+  g.fillStyle = body;
+  g.fill(shape);
+  g.save();
+  g.clip(shape);
+  g.strokeStyle = 'rgba(100, 78, 48, 0.45)';       // spiral seam
+  g.lineWidth = 1;
+  g.beginPath(); g.moveTo(-half, top + 22); g.lineTo(half, top + 58); g.stroke();
+  g.beginPath(); g.moveTo(-half, top + 70); g.lineTo(half, top + 106); g.stroke();
+  g.restore();
+  g.strokeStyle = tubeHover ? 'rgba(255, 214, 90, 0.95)' : 'rgba(70, 50, 25, 0.6)';
+  g.lineWidth = tubeHover ? 2.2 : 1;
+  g.stroke(shape);
+  g.fillStyle = '#cbb691';                        // open top
+  g.beginPath(); g.ellipse(0, top, half, 6, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#3a2a1a';
+  g.beginPath(); g.ellipse(0, top + 0.5, half - 3, 4, 0, 0, Math.PI * 2); g.fill();
+  markerText(g, 'DROP', 0, top + 52, 13, -0.12, '#b8322a');
+  g.restore();
+  drawTape(g, { x: view.cx - half - 4, y: top + 12, ang: -0.5, len: 30, wid: 11, jag: [0.2, 0.7, 0.4, 0.9, 0.3, 0.6, 0.5] });
+  drawTape(g, { x: view.cx + half + 4, y: top + 14, ang: 0.45, len: 30, wid: 11, jag: [0.6, 0.3, 0.8, 0.1, 0.5, 0.4, 0.2] });
+
+  if (hintAlpha > 0.01) {                         // "tap to drop!" note until the first marble
+    g.save();
+    g.globalAlpha = hintAlpha;
+    markerText(g, 'tap to drop!', view.cx + half + 62, top + 44, 16, -0.08, '#2a1d12');
+    g.strokeStyle = '#2a1d12';
+    g.lineWidth = 1.8;
+    g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(view.cx + half + 28, top + 56);
+    g.quadraticCurveTo(view.cx + half + 18, top + 66, view.cx + half + 6, top + 60);
+    g.moveTo(view.cx + half + 12, top + 55); g.lineTo(view.cx + half + 6, top + 60); g.lineTo(view.cx + half + 13, top + 64);
+    g.stroke();
+    g.restore();
+  }
+}
+
+// Recycled clear plastic cup at the bottom: the back is drawn before marbles, the front after
+function cupPath(g) {
+  g.beginPath();
+  g.moveTo(-CUP.halfTop, CUP.top);
+  g.lineTo(-CUP.halfBottom, CUP.bottom);
+  g.lineTo(CUP.halfBottom, CUP.bottom);
+  g.lineTo(CUP.halfTop, CUP.top);
+}
+
+function drawCupBack(g) {
+  g.save();
+  g.translate(view.cx, 0);
+  g.fillStyle = 'rgba(40, 20, 5, 0.3)';
+  g.beginPath(); g.ellipse(4, CUP.bottom + 3, CUP.halfBottom + 8, 5, 0, 0, Math.PI * 2); g.fill();
+  if (cup.glow > 0) {
+    g.shadowColor = `rgba(255, 225, 110, ${cup.glow})`;
+    g.shadowBlur = 30 * cup.glow * view.scale * view.dpr;
+  }
+  cupPath(g);
+  g.closePath();
+  g.fillStyle = `rgba(215, 238, 245, ${0.3 + cup.glow * 0.3})`;
+  g.fill();
+  g.shadowBlur = 0;
+  g.strokeStyle = 'rgba(80, 130, 150, 0.4)';
+  g.lineWidth = 1.2;
+  g.beginPath(); g.ellipse(0, CUP.top, CUP.halfTop, 5, 0, Math.PI, Math.PI * 2); g.stroke();
+  g.restore();
+}
+
+function drawCupFront(g) {
+  g.save();
+  g.translate(view.cx, 0);
+  cupPath(g);
+  g.closePath();
+  g.fillStyle = 'rgba(230, 246, 250, 0.16)';
+  g.fill();
+  g.strokeStyle = 'rgba(70, 120, 140, 0.75)';
+  g.lineWidth = 2;
+  g.lineJoin = 'round';
+  cupPath(g);
+  g.stroke();
+  g.strokeStyle = 'rgba(255, 255, 255, 0.4)';      // moulded ribs
+  g.lineWidth = 1;
+  for (const k of [-0.55, 0, 0.55]) {
+    g.beginPath(); g.moveTo(k * CUP.halfTop, CUP.top + 20); g.lineTo(k * CUP.halfBottom, CUP.bottom - 3); g.stroke();
+  }
+  g.strokeStyle = 'rgba(255, 255, 255, 0.85)';     // rolled rim
+  g.lineWidth = 2.4;
+  g.beginPath(); g.ellipse(0, CUP.top, CUP.halfTop, 5, 0, 0, Math.PI); g.stroke();
+  g.restore();
+  drawTape(g, { x: view.cx, y: CUP.top + 20, ang: -0.04, len: 62, wid: 15, jag: [0.3, 0.6, 0.2, 0.8, 0.5, 0.4, 0.7] });
+  markerText(g, 'FINISH', view.cx, CUP.top + 20, 12, -0.04, '#b8322a');
+}
+
+function drawParticles(g, body) {
+  for (const p of particles) {
+    if (p.body !== body) continue;
+    const k = 1 - p.t / p.life;
+    g.save();
+    g.translate(p.x + (body === FIXED ? view.cx : 0), p.y);
+    g.rotate(p.rot);
+    g.globalAlpha = clamp(k * 1.4, 0, 1);
+    if (p.kind === 'note') {
+      g.font = `bold 16px ${HAND_FONT}`;
+      g.textAlign = 'center';
+      g.fillStyle = '#2a1d12';
+      g.fillText(p.text, 0, 0);
+    } else if (p.kind === 'confetti') {
+      g.fillStyle = p.color;
+      g.fillRect(-3, -2, 6, 4);
+    } else {
+      g.fillStyle = 'rgba(235, 220, 195, 0.6)';
+      g.beginPath(); g.arc(0, 0, 3 + p.t * 16, 0, Math.PI * 2); g.fill();
+    }
+    g.restore();
+  }
+}
+
+function render(t) {
+  const d = view.dpr, s = view.scale * d, oy = view.originY * d;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(bgCanvas, 0, 0);
+  ctx.drawImage(panelCanvas, (maze.x - PANEL_PAD) * s, oy + (MAZE_TOP - PANEL_PAD) * s);
+
+  ctx.setTransform(s, 0, 0, s, maze.x * s, oy + MAZE_TOP * s);   // panel space
+  for (const ob of obstacles) drawObstacle(ctx, ob, t);
+  for (const o of overlays) (o.kind === 'tape' ? drawTape : drawStaple)(ctx, o);
+  drawParticles(ctx, MAZE);
+
+  ctx.setTransform(s, 0, 0, s, 0, oy);                          // world space
+  drawCupBack(ctx);
+  for (const m of marbles) drawMarble(ctx, m);
+  drawTube(ctx);
+  drawCupFront(ctx);
+  drawParticles(ctx, FIXED);
+  drawParticles(ctx, null);
+}
+
+/* ============================================================================
+ *  INPUT
+ *  Mouse: the panel's centre follows the cursor. Touch/pen: drag to slide it.
+ *  Click or tap the tube (or press Space) to drop. Arrow keys also slide.
+ * ========================================================================== */
+const dropBtn = document.getElementById('dropBtn');
+const resetBtn = document.getElementById('resetBtn');
+const muteBtn = document.getElementById('muteBtn');
+let lastDrop = -Infinity, drag = null;
+
+function toWorld(clientX, clientY) {
+  return [clientX / view.scale, (clientY - view.originY) / view.scale];
+}
+
+function overTube(wx, wy) {
+  return Math.abs(wx - view.cx) < TUBE.half + 14 && wy > TUBE.top - 14 && wy < TUBE.bottom + 18;
+}
+
+function dropMarble() {
+  const now = performance.now();
+  if (now - lastDrop < 150) return;               // keep marbles from spawning on top of each other
+  lastDrop = now;
+  if (spawnMarble()) { tubePulse = 1; dropped = true; }
+}
+
+function toggleMute() {
+  piano.setMuted(!piano.muted);
+  muteBtn.innerHTML = piano.muted ? '&#128263; Muted' : '&#128266; Sound on';
+  muteBtn.setAttribute('aria-pressed', String(piano.muted));
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  piano.init();                                   // audio may only start after a user gesture
+  const [wx, wy] = toWorld(e.clientX, e.clientY);
+  if (e.pointerType === 'mouse') {
+    if (e.button === 0 && overTube(wx, wy)) dropMarble();
+    return;
+  }
+  drag = { id: e.pointerId, startX: e.clientX, startTarget: maze.target, moved: false, onTube: overTube(wx, wy) };
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'mouse') {
+    const [wx, wy] = toWorld(e.clientX, e.clientY);
+    tubeHover = overTube(wx, wy);
+    canvas.style.cursor = tubeHover ? 'pointer' : 'default';
+    setMazeTarget(wx - MAZE_W / 2);
+    return;
+  }
+  if (drag && e.pointerId === drag.id) {
+    const dx = e.clientX - drag.startX;
+    if (Math.abs(dx) > 8) drag.moved = true;
+    setMazeTarget(drag.startTarget + dx / view.scale);
+  }
+});
+
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (e.type === 'pointerup' && !drag.moved && drag.onTube) dropMarble();
+  drag = null;
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') tubeHover = false; });
+
+window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLButtonElement && (e.key === ' ' || e.key === 'Enter')) return; // the button handles it
+  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); piano.init(); dropMarble(); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); setMazeTarget(maze.target - 40); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); setMazeTarget(maze.target + 40); }
+  else if (e.key === 'm' || e.key === 'M') { piano.init(); toggleMute(); }
+});
+
+dropBtn.addEventListener('click', () => { piano.init(); dropMarble(); });
+resetBtn.addEventListener('click', () => { piano.init(); resetRun(); });
+muteBtn.addEventListener('click', () => { piano.init(); toggleMute(); });
+muteBtn.setAttribute('aria-label', 'Mute');
+
+let resizeQueued = false;
+window.addEventListener('resize', () => {
+  if (resizeQueued) return;
+  resizeQueued = true;
+  requestAnimationFrame(() => { resizeQueued = false; layout(); });
+});
+
+/* ============================================================================
+ *  MAIN LOOP
+ * ========================================================================== */
+let lastFrame = performance.now(), clock = 0;
+function frame(now) {
+  const dt = Math.min((now - lastFrame) / 1000, 1 / 20);
+  lastFrame = now;
+  clock += dt;
+  update(dt);
+  tubePulse = Math.max(0, tubePulse - dt * 4);
+  if (dropped) hintAlpha = Math.max(0, hintAlpha - dt * 1.5);
+  render(clock);
+  requestAnimationFrame(frame);
+}
+
+buildLevel();
+prepColliders();
+layout();
+requestAnimationFrame(frame);
+
+// Handy for tinkering in the browser console, e.g. marbleRun.drop()
+window.marbleRun = {
+  drop: dropMarble,
+  reset: resetRun,
+  simulate(seconds, dt = 1 / 60) { for (let t = 0; t < seconds; t += dt) update(dt); },
+  get marbles() { return marbles; },
+  get score() { return score; },
+  maze, view, obstacles,
+};
+</script>
+</body>
+</html>
