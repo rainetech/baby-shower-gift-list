@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Marble Music</title>
+<meta name="description" content="Build your own metal marble run on a pegboard. Every piece of metal rings like a piano key; press Play and the marbles make music. Demo runs play songs, one landing per note.">
+<style>
+  :root {
+    --ink: #2b2118; --ink-soft: #6b5a48; --panel: rgba(255, 251, 244, 0.9); --panel-solid: #fffaf1; --line: rgba(80, 58, 36, 0.16);
+    --accent: #f08a24; --accent-dk: #c9650a; --go: #2fb463; --go-dk: #1f8a49; --stop: #e0493b; --focus: #1b64c9; --sel: #ffd54a;
+    --ui: "Nunito", "Varela Round", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --radius: 16px; --shadow: 0 10px 28px rgba(40, 24, 8, 0.24), 0 2px 6px rgba(40, 24, 8, 0.14);
+    --top-h: 60px; --tray-h: 98px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #c9bfae; color: var(--ink); font-family: var(--ui);
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  html, body, button { touch-action: manipulation; }
+  canvas.layer { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #stage { touch-action: none; outline: none; }
+  #stage:focus-visible { outline: 3px solid var(--sel); outline-offset: -3px; }
+  #fx { pointer-events: none; z-index: 1; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2); }
+  button { font: inherit; font-weight: 800; font-size: 15px; color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    gap: 6px; min-height: 40px; min-width: 40px; padding: 6px 12px; border-radius: 12px; border: 1px solid rgba(80, 58, 36, 0.2);
+    background: linear-gradient(#fffdf8, #f1e9dc); box-shadow: 0 1px 0 #fff inset, 0 2px 3px rgba(40, 24, 8, 0.15); white-space: nowrap; transition: transform .08s, filter .12s; }
+  button:hover { filter: brightness(1.04); }
+  button:active { transform: translateY(1px); box-shadow: 0 1px 1px rgba(40, 24, 8, 0.2) inset; }
+  button:disabled { opacity: 0.4; cursor: default; filter: none; transform: none; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  button svg { width: 20px; height: 20px; flex: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* ---- Top bar: name, transport, tools ---- */
+  #topbar { position: fixed; z-index: 4; left: 10px; right: 10px; top: max(8px, env(safe-area-inset-top)); height: var(--top-h);
+    display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+  .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .brand svg { width: 36px; height: 36px; flex: none; }
+  .brand h1 { margin: 0; font-size: 20px; font-weight: 900; letter-spacing: 0.01em; white-space: nowrap; }
+  .brand h1 small { display: block; font-size: 11.5px; font-weight: 700; color: var(--ink-soft); letter-spacing: 0.02em; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+  .transport { display: flex; align-items: center; gap: 8px; margin: 0 auto; }
+  #playBtn { background: linear-gradient(#45d07f, var(--go)); color: #fff; border-color: var(--go-dk); min-width: 104px; font-size: 17px; text-shadow: 0 1px 0 rgba(0,0,0,.18); }
+  #playBtn.on { background: linear-gradient(#38b86d, #1f9a52); box-shadow: 0 0 0 3px rgba(47, 180, 99, 0.35), 0 2px 3px rgba(40, 24, 8, 0.15); }
+  #stopBtn svg rect { fill: var(--stop); }
+  #stopBtn[hidden] { display: none; }
+  .tempo { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 12px; background: rgba(80, 58, 36, 0.07); }
+  .tempo button { min-width: 32px; min-height: 34px; padding: 0 8px; font-size: 18px; }
+  .tempo output { min-width: 58px; text-align: center; font-weight: 900; font-size: 15px; line-height: 1; }
+  .tempo output small { display: block; font-size: 10px; font-weight: 700; color: var(--ink-soft); }
+  .tools { display: flex; align-items: center; gap: 6px; }
+  #demosBtn { background: linear-gradient(#ffb354, var(--accent)); border-color: var(--accent-dk); color: #3b1f00; }
+  #helpBtn { border-radius: 50%; width: 40px; padding: 0; font-size: 19px; }
+  .ico-only .lbl { display: none; }
+  .cap { display: none; }
+  #playBtn .i-stop { display: none; }
+  #playBtn.on .i-play { display: none; }
+  #playBtn.on .i-stop { display: inline; }
+  .tempo .metro { min-width: 34px; padding: 0 6px; margin-left: 2px; }
+  .tempo .metro[aria-pressed="true"] { background: #fff1c9; box-shadow: 0 0 0 2px var(--sel) inset; }
+  .tempo button[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+  .tempo.timed output small::after { content: ' · song'; }
+
+  /* ---- Piece tray ---- */
+  #tray { position: fixed; z-index: 4; left: 50%; transform: translateX(-50%); bottom: max(8px, env(safe-area-inset-bottom)); height: var(--tray-h);
+    display: flex; align-items: stretch; gap: 6px; padding: 7px; max-width: calc(100vw - 16px); }
+  #tray .pieces { display: flex; gap: 6px; }
+  .piece { flex-direction: column; gap: 1px; width: 76px; min-height: 0; padding: 3px 2px 5px; border-radius: 12px; font-size: 12.5px; font-weight: 800; background: linear-gradient(#fffefb, #f3ecdf); touch-action: none; }
+  .piece canvas { width: 64px; height: 52px; display: block; pointer-events: none; }
+  .piece .nx { font-size: 10px; font-weight: 900; color: #fff; line-height: 1; padding: 1px 5px 2px; border-radius: 999px; background: var(--kc, #8a7a68); }
+  .nextchip { display: none; }
+  .piece.arm { box-shadow: 0 0 0 3px var(--sel), 0 2px 3px rgba(40, 24, 8, 0.15); background: #fff7d6; }
+  #tray.trash { box-shadow: 0 0 0 3px #ff7a6b, var(--shadow); background: rgba(255, 228, 222, 0.95); }
+  .viewctl { display: flex; flex-direction: column; justify-content: center; gap: 4px; padding-left: 6px; border-left: 1px solid var(--line); }
+  .viewctl .row { display: flex; gap: 4px; }
+  .viewctl button { min-width: 36px; min-height: 36px; padding: 0 7px; font-size: 13px; }
+  #pathBtn[aria-pressed="false"] { opacity: 0.55; }
+
+  /* ---- Inspector (the selected piece) ---- */
+  #inspector { position: fixed; z-index: 5; right: 10px; top: calc(max(8px, env(safe-area-inset-top)) + var(--top-h) + 10px); width: 276px;
+    max-height: calc(100vh - var(--top-h) - var(--tray-h) - 44px); overflow: auto; padding: 12px 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+  #inspector[hidden] { display: none; }
+  #inspector .cmp-only { display: none; }
+  .ins-head { display: flex; align-items: center; gap: 8px; }
+  .ins-head canvas { width: 46px; height: 38px; flex: none; }
+  .ins-head h2 { margin: 0; font-size: 17px; font-weight: 900; flex: 1; line-height: 1.1; }
+  .ins-head h2 small { display: block; font-size: 11.5px; font-weight: 700; color: var(--ink-soft); }
+  .ins-head .x { min-width: 34px; min-height: 34px; padding: 0; border-radius: 50%; }
+  .notechip { display: inline-block; padding: 2px 9px; border-radius: 999px; color: #fff; font-weight: 900; font-size: 13px; text-shadow: 0 1px 0 rgba(0,0,0,.25); }
+  .ins-sec { display: flex; flex-direction: column; gap: 6px; }
+  .ins-sec > label, .ins-sec > .lab { font-size: 12px; font-weight: 800; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; justify-content: space-between; }
+  .oct { display: flex; align-items: center; gap: 4px; }
+  .oct button { min-width: 28px; min-height: 26px; padding: 0 6px; font-size: 12px; border-radius: 8px; }
+  .oct .mutebtn { margin-right: 6px; text-transform: none; letter-spacing: 0; font-weight: 800; }
+  .oct .mutebtn[aria-pressed="true"] { background: #6b7079; color: #fff; }
+  .piano { position: relative; height: 92px; display: flex; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(40,24,8,.25) inset; background: #1d1712; padding: 4px 3px 3px; gap: 1px; }
+  .piano .w { flex: 1; min-width: 0; min-height: 0; height: 100%; padding: 0 0 5px; flex-direction: column; justify-content: flex-end; align-items: center; gap: 0; border-radius: 0 0 5px 5px; border: 0;
+    background: linear-gradient(#fbf8f2, #e7e1d6); font-size: 9.5px; font-weight: 900; color: #6d6154; box-shadow: none; }
+  .piano .b { position: absolute; top: 4px; height: 56%; min-height: 0; min-width: 0; padding: 0; border-radius: 0 0 4px 4px; border: 0; z-index: 1;
+    background: linear-gradient(#3a3531, #0e0c0b); box-shadow: 0 2px 2px rgba(0,0,0,.4); }
+  .piano .w.on, .piano .b.on { background: var(--kc); color: #fff; box-shadow: 0 0 10px var(--kc) inset; }
+  .piano .w .dot { display: block; width: 7px; height: 7px; border-radius: 50%; margin: 0 auto 3px; background: var(--kc); opacity: .9; flex: none; }
+  .piano .w span:last-child { font-size: 9px; line-height: 1; letter-spacing: -0.02em; }
+  .sizes { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 4px 8px; font-size: 13px; font-weight: 800; }
+  .sizes input[type=range] { width: 100%; accent-color: var(--accent); }
+  .sizes output { min-width: 34px; text-align: right; color: var(--ink-soft); font-size: 12px; }
+  .btnrow { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btnrow button { flex: 1; font-size: 13.5px; padding: 6px 8px; }
+  .danger { color: #a32218; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .seg button { min-height: 34px; font-size: 13px; padding: 4px 6px; white-space: normal; line-height: 1.1; min-width: 0; }
+  .seg button[aria-pressed="true"] { background: #fff1c9; box-shadow: 0 0 0 2px var(--sel) inset; }
+
+  /* ---- Music strip (demo playing) and the demo banner ---- */
+  #strip { position: fixed; z-index: 3; left: 50%; transform: translateX(-50%); top: calc(max(8px, env(safe-area-inset-top)) + var(--top-h) + 8px);
+    width: min(820px, calc(100vw - 24px)); height: 80px; padding: 6px 8px; display: flex; gap: 10px; align-items: center; }
+  #strip[hidden] { display: none; }
+  #strip .t { font-size: 13px; font-weight: 900; line-height: 1.12; width: 132px; flex: none; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  #strip .t small { display: block; font-weight: 700; color: var(--ink-soft); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #strip canvas { flex: 1; height: 66px; min-width: 0; border-radius: 8px; background: #221a13; }
+  #strip .btns { display: flex; flex-direction: column; gap: 4px; }
+  #strip .btns button { min-height: 32px; font-size: 12.5px; padding: 3px 9px; }
+
+  /* ---- Dialogs: demos gallery, menu, coach ---- */
+  .scrim { position: fixed; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: rgba(28, 18, 8, 0.45); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+  .scrim[hidden] { display: none; }
+  .dialog { width: min(880px, 100%); max-height: 100%; overflow: auto; padding: 18px 20px 20px; background: var(--panel-solid); }
+  .dialog h2 { margin: 0 0 4px; font-size: 24px; font-weight: 900; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .dialog h2 .x { min-width: 38px; border-radius: 50%; padding: 0; font-size: 18px; }
+  .dialog p.sub { margin: 0 0 14px; color: var(--ink-soft); font-weight: 700; font-size: 14.5px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .card { border-radius: 14px; background: #fff; border: 1px solid var(--line); box-shadow: 0 3px 10px rgba(40, 24, 8, 0.12); overflow: hidden; display: flex; flex-direction: column; }
+  .card canvas { width: 100%; height: 96px; display: block; background: #231a12; }
+  .card .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .card h3 { margin: 0; font-size: 16.5px; font-weight: 900; }
+  .card h3 small { display: block; font-size: 12px; font-weight: 700; color: var(--ink-soft); margin-top: 2px; }
+  .card .btnrow { margin-top: auto; }
+  .card .play { background: linear-gradient(#45d07f, var(--go)); color: #fff; border-color: var(--go-dk); }
+  #menu .dialog { width: min(520px, 100%); }
+  .mrow { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  .mrow input[type=text], .mrow select { font: inherit; font-weight: 700; font-size: 15px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; min-height: 40px; flex: 1; min-width: 0; }
+  .mrow button { flex: none; }
+  .slots { list-style: none; margin: 4px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow: auto; }
+  .slots li { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; background: #fff; border: 1px solid var(--line); border-radius: 10px; font-weight: 800; }
+  .slots li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slots li small { color: var(--ink-soft); font-weight: 700; }
+  .slots li button { min-height: 32px; font-size: 13px; padding: 3px 9px; }
+  .slots li.ask { background: #fff4d0; border-color: #e0b84a; flex-wrap: wrap; }
+  .slots li.ask span { white-space: normal; flex-basis: 100%; }
+  .msec { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+  .msec h3 { margin: 0 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-soft); }
+  #shareOut { width: 100%; font: 12px monospace; padding: 6px; border-radius: 8px; border: 1px solid var(--line); background: #fff; resize: none; height: 54px; }
+  #shareOut[hidden] { display: none; }
+
+  #coach .dialog { width: min(900px, 100%); }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .steps li { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px 12px; text-align: center; box-shadow: 0 2px 8px rgba(40,24,8,.08); }
+  .steps svg { width: 100%; max-width: 220px; height: auto; aspect-ratio: 220 / 130; display: block; margin: 0 auto 6px; }
+  .steps b { display: block; font-size: 17px; font-weight: 900; margin-bottom: 3px; }
+  .steps b i { font-style: normal; display: inline-grid; place-items: center; width: 1.45em; height: 1.45em; margin-right: 6px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.85em; }
+  .steps span { font-size: 14.5px; line-height: 1.35; font-weight: 600; }
+  .steps em { font-style: normal; font-weight: 900; color: var(--accent-dk); }
+  .coach-go { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 16px; position: sticky; bottom: -20px; padding: 8px 0 14px; background: var(--panel-solid); }
+  @media (max-height: 600px) { .steps svg { max-width: 150px; } .steps li { padding: 6px 8px; } .coach-go { bottom: -16px; margin-top: 8px; } }
+  #coachGo { font-size: 20px; padding: 10px 36px; min-height: 52px; background: linear-gradient(#45d07f, var(--go)); color: #fff; border-color: var(--go-dk); }
+  .coach-go small { font-weight: 700; color: var(--ink-soft); font-size: 13px; }
+  .t-touch { display: none; }
+  @media (hover: none) and (pointer: coarse) { .t-touch { display: inline; } .t-mouse { display: none; } }
+  .ill-marble { animation: fall 2.4s ease-in infinite; }
+  @keyframes fall { 0%, 10% { transform: translate(0, -20px); opacity: 0; } 18% { opacity: 1; } 45% { transform: translate(0, 18px); } 60% { transform: translate(26px, 8px); } 80% { transform: translate(52px, 34px); opacity: 1; } 95%, 100% { transform: translate(52px, 34px); opacity: 0; } }
+  .ill-drag { animation: drag 2.6s ease-in-out infinite; }
+  @keyframes drag { 0%, 15% { transform: translate(0, 0); } 70%, 100% { transform: translate(74px, -58px); } }
+  .ill-ring { animation: ring 1.2s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes ring { 0% { opacity: .9; transform: scale(.6); } 100% { opacity: 0; transform: scale(1.8); } }
+
+  #toast { position: fixed; z-index: 11; left: 50%; bottom: calc(var(--tray-h) + 22px); transform: translateX(-50%) translateY(10px); opacity: 0; pointer-events: none;
+    padding: 9px 16px; border-radius: 999px; background: rgba(35, 26, 18, 0.92); color: #fff; font-weight: 800; font-size: 14.5px; transition: opacity .2s, transform .2s;
+    display: flex; gap: 10px; align-items: center; width: max-content; max-width: calc(100vw - 24px); box-sizing: border-box; }
+  #toast.show { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
+  #toast span { min-width: 0; }
+  #toast button { flex: none; white-space: nowrap; min-height: 28px; padding: 2px 10px; font-size: 13px; }
+  #loading { position: fixed; inset: 0; z-index: 2; display: grid; place-items: center; pointer-events: none; }
+  #loading[hidden] { display: none; }
+  #loading span { display: grid; gap: 8px; justify-items: center; padding: 12px 22px; font-size: 16px; font-weight: 800; }
+  #loading .progress { display: block; width: 180px; height: 6px; border-radius: 3px; background: rgba(80, 58, 36, 0.15); overflow: hidden; }
+  #loading .progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+  /* ---- The inspector sits below the music strip when both are shown ---- */
+  body.has-strip #inspector { top: calc(max(8px, env(safe-area-inset-top)) + var(--top-h) + 100px); max-height: calc(100vh - var(--top-h) - var(--tray-h) - 134px); }
+  /* ---- Tablets and small laptops: a compact top bar (logo only, icon buttons for the less-used tools) ---- */
+  @media (max-width: 1120px) and (min-width: 720px) {
+    .brand h1 { display: none; }
+    #dropBtn .lbl, #menuBtn .lbl { display: none; }
+    #topbar { gap: 8px; }
+  }
+  @media (max-width: 860px) and (min-width: 720px) { .tempo output { min-width: 44px; } #playBtn { min-width: 88px; } }
+  @media (max-width: 960px) and (min-width: 720px) {
+    #tray { gap: 4px; padding: 6px; }
+    #tray .pieces { gap: 4px; }
+    .piece { width: 66px; font-size: 11.5px; }
+    .piece canvas { width: 56px; height: 48px; }
+    .viewctl { padding-left: 4px; }
+    .viewctl button { min-width: 32px; padding: 0 5px; font-size: 12px; }
+  }
+  /* ---- Phones held upright: icon-only top bar, a two-row tray (view controls in its last cell), the inspector as a bottom sheet ---- */
+  @media (max-width: 719px) {
+    :root { --top-h: 50px; --tray-h: 126px; }
+    #topbar { left: 6px; right: 6px; gap: 4px; padding: 0 5px; justify-content: space-between; }
+    .brand, .tempo { display: none; }
+    .transport, .tools { gap: 4px; margin: 0; }
+    .lbl { display: none; }
+    button { padding: 5px 7px; min-width: 38px; min-height: 38px; }
+    #topbar button { flex-direction: column; gap: 0; padding: 2px 4px 1px; min-height: 42px; }
+    #topbar button svg { width: 19px; height: 19px; }
+    #topbar .cap { display: block; font-size: 9.5px; font-weight: 800; line-height: 1; margin-top: 1px; letter-spacing: 0; }
+    #topbar #playBtn .cap { color: #fff; }
+    #helpBtn .q { font-size: 17px; line-height: 19px; }
+    #playBtn { min-width: 46px; }
+    #helpBtn { width: auto; border-radius: 12px; }
+    #tray { left: 6px; right: 6px; transform: none; max-width: none; height: auto; display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; padding: 6px; }
+    #tray .pieces { display: contents; }
+    .piece { width: auto; font-size: 11px; padding: 2px 1px 3px; min-height: 52px; }
+    .piece canvas { width: 50px; height: 32px; }
+    .piece .nx { display: none; }
+    .nextchip { display: block; position: absolute; left: 12px; top: -13px; padding: 2px 9px 3px; border-radius: 999px; font-size: 11px; font-weight: 900; color: #fff;
+      background: var(--kc, #8a7a68); box-shadow: 0 1px 3px rgba(40,24,8,.3); pointer-events: none; }
+    .viewctl { border-left: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+    .viewctl .row { display: contents; }
+    .viewctl button { min-width: 0; min-height: 0; padding: 0; font-size: 11px; border-radius: 8px; }
+    #inspector, body.has-strip #inspector { left: 6px; right: 6px; top: auto; width: auto; z-index: 3; bottom: calc(max(8px, env(safe-area-inset-bottom)) + var(--tray-h) + 6px);
+      max-height: calc(100% - var(--top-h) - var(--tray-h) - 40px); border-radius: 18px; gap: 8px; padding: 10px; }
+    .piano { height: 74px; }
+    #inspector.compact { max-height: 130px; overflow: hidden; gap: 5px; padding: 6px 8px 7px; }
+    #inspector.compact .full-only { display: none; }
+    #inspector .cmp-only { display: inline-flex; min-width: 36px; min-height: 34px; padding: 0 8px; font-size: 17px; }
+    #inspector.compact .ins-head canvas { width: 34px; height: 28px; }
+    #inspector.compact .ins-head h2 { font-size: 15px; }
+    #inspector.compact .piano { height: 60px; }
+    body.ins-open #strip { visibility: hidden; }
+    body.ins-open #toast { top: calc(max(8px, env(safe-area-inset-top)) + var(--top-h) + 10px); bottom: auto; }
+    #strip { top: auto; bottom: calc(max(8px, env(safe-area-inset-bottom)) + var(--tray-h) + 18px); height: 70px; gap: 6px; padding: 5px 6px; }
+    #strip .t { width: 70px; font-size: 11.5px; -webkit-line-clamp: 3; }
+    #strip .t small { font-size: 10px; white-space: normal; }
+    #strip .t small.demo-sub { display: none; }
+    #strip canvas { height: 58px; }
+    #strip .btns button { min-height: 28px; min-width: 0; padding: 2px 7px; font-size: 11.5px; }
+    #toast { bottom: calc(var(--tray-h) + 16px); }
+    body.has-strip #toast { bottom: calc(var(--tray-h) + 102px); }
+    .steps { grid-template-columns: 1fr; gap: 8px; }
+    .steps li { display: grid; grid-template-columns: 104px 1fr; gap: 2px 10px; align-items: center; text-align: left; padding: 8px 10px; }
+    .steps svg { grid-row: span 2; margin: 0; }
+    .steps b { font-size: 16px; }
+    .steps span { font-size: 13.5px; }
+    .dialog { padding: 14px 14px 16px; }
+    .dialog h2 { font-size: 20px; }
+  }
+  @media (max-width: 370px) {
+    #topbar { gap: 2px; padding: 0 4px; }
+    .transport, .tools { gap: 3px; }
+    button { min-width: 32px; padding: 4px 5px; }
+    #playBtn { min-width: 40px; }
+    #helpBtn { width: 32px; }
+  }
+  @media (max-width: 780px) and (min-width: 720px) {
+    .piece { width: 61px; }
+    .piece canvas { width: 52px; height: 44px; }
+  }
+  /* ---- Phones on their side: controls in a column on the left, the tray as a column on the right ---- */
+  @media (orientation: landscape) and (max-height: 540px) {
+    :root { --top-h: 0px; --tray-h: 0px; }
+    #topbar { left: max(6px, env(safe-area-inset-left)); right: auto; top: 6px; bottom: 6px; height: auto; width: 100px; flex-direction: column; justify-content: flex-start; padding: 6px; gap: 5px; }
+    .brand, .tempo { display: none; }
+    .transport { flex-direction: column; margin: 0; width: 100%; gap: 5px; }
+    .tools { display: grid; grid-template-columns: 1fr 1fr; width: 100%; gap: 5px; }
+    .lbl { display: none; }
+    #playBtn .lbl, #demosBtn .lbl { display: inline; }
+    .transport button, .tools button { width: 100%; min-width: 0; min-height: 34px; font-size: 13px; padding: 3px 5px; }
+    #playBtn { font-size: 14px; }
+    #demosBtn { grid-column: span 2; }
+    #helpBtn { border-radius: 12px; width: 100%; }
+    #tray { left: auto; right: max(6px, env(safe-area-inset-right)); top: 6px; bottom: auto; height: auto; max-height: calc(100vh - 12px); transform: none; display: grid; grid-template-columns: 1fr 1fr; width: 136px; gap: 4px; padding: 5px; }
+    #tray .pieces { display: contents; }
+    .piece { width: auto; font-size: 10.5px; padding: 1px; min-height: 44px; }
+    .piece canvas { width: 44px; height: 26px; }
+    .piece .nx { display: none; }
+    .viewctl { border-left: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+    .viewctl .row { display: contents; }
+    .viewctl button { min-width: 0; min-height: 0; padding: 0; font-size: 10.5px; border-radius: 8px; }
+    #inspector, body.has-strip #inspector { top: 6px; bottom: 6px; right: 150px; left: auto; max-height: none; width: 250px; padding: 8px; gap: 6px; }
+    body.has-strip #inspector { top: 56px; }
+    .piano { height: 62px; }
+    #strip { top: 6px; left: 116px; right: 150px; width: auto; transform: none; height: 50px; padding: 4px 6px; gap: 6px; }
+    #strip .t { display: none; }
+    #strip canvas { height: 42px; }
+    #strip .btns { flex-direction: row; }
+    #strip .btns button { min-height: 32px; min-width: 0; padding: 2px 8px; font-size: 12px; }
+    #toast { bottom: 14px; }
+    .steps { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .steps li { display: block; padding: 6px 8px; text-align: center; }
+    .steps svg { max-width: 110px; margin: 0 auto 2px; }
+    .steps span { font-size: 12.5px; }
+    .dialog { padding: 10px 14px 12px; }
+    .dialog h2 { font-size: 18px; }
+    .dialog p.sub { margin-bottom: 8px; font-size: 13px; }
+    .coach-go { margin-top: 8px; }
+    #coachGo { min-height: 42px; font-size: 17px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .ill-marble, .ill-drag, .ill-ring { animation: none; } button, #toast { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="stage" class="layer" tabindex="0" role="application" aria-roledescription="marble run builder" aria-label="Pegboard. Add pieces from the tray. [ and ] pick a piece; arrow keys nudge it; R and Q turn it; Delete removes it; Space plays."></canvas>
+<canvas id="fx" class="layer" aria-hidden="true"></canvas>
+
+<header id="topbar" class="panel">
+  <div class="brand">
+    <svg viewBox="0 0 40 40" aria-hidden="true"><rect x="2" y="2" width="36" height="36" rx="10" fill="#2a2018"/><rect x="7" y="11" width="16" height="4" rx="2" fill="#e5392f" transform="rotate(12 15 13)"/><rect x="17" y="20" width="16" height="4" rx="2" fill="#f0d02a" transform="rotate(-12 25 22)"/><rect x="7" y="29" width="16" height="4" rx="2" fill="#3d6bdb" transform="rotate(10 15 31)"/><circle cx="27" cy="11" r="4.2" fill="#8fd0ff" stroke="#fff" stroke-width="1.2"/></svg>
+    <h1>Marble Music<small id="layoutName">My marble run</small></h1>
+  </div>
+  <div class="transport" role="group" aria-label="Playback">
+    <button id="playBtn" type="button" aria-label="Play (Space)" title="Play (Space)" aria-keyshortcuts="Space"><svg viewBox="0 0 20 20" aria-hidden="true"><path class="i-play" d="M6 3.5v13l11-6.5z" fill="#fff"/><rect class="i-stop" x="5" y="5" width="10" height="10" rx="1.5" fill="#fff"/></svg><span class="lbl">Play</span><span class="cap">Play</span></button>
+    <button id="stopBtn" type="button" aria-label="Stop" title="Stop"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="4" width="12" height="12" rx="2"/></svg><span class="cap">Stop</span></button>
+    <button id="dropBtn" type="button" aria-label="Drop one marble (D)" title="Drop one marble (D)" aria-keyshortcuts="D"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.2v2.6M6.6 2.6v2.2M13.4 2.6v2.2" stroke="#2a2018" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="10.2" r="5" fill="#4f9be8" stroke="#2a2018" stroke-width="1.3"/><circle cx="8.4" cy="8.6" r="1.4" fill="#fff" opacity=".9"/><path d="M3 18.4 17 16.2" stroke="#e5392f" stroke-width="2.4" stroke-linecap="round"/></svg><span class="lbl">Drop one</span><span class="cap">Drop</span></button>
+    <div class="tempo" role="group" aria-label="Beat speed"><button id="tempoDown" type="button" aria-label="Slower beat" title="Slower beat: the beat dots move apart and repeating droppers drop less often. Marbles always fall at the speed of gravity.">−</button><output id="tempoVal" title="Beat speed: sets the beat dots and how often repeating droppers drop. Marbles always fall at the speed of gravity.">100<small>beat/min</small></output><button id="tempoUp" type="button" aria-label="Faster beat" title="Faster beat: the beat dots close up and repeating droppers drop more often. Marbles always fall at the speed of gravity.">+</button><button id="metroBtn" type="button" class="metro" aria-pressed="false" aria-label="Metronome" title="Metronome: a soft tick on every beat while playing"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.2 2.5h5.6l3 15H4.2z" fill="#f2e3c6" stroke="#2a2018" stroke-width="1.4" stroke-linejoin="round"/><path d="M10 15 13.8 5.2" stroke="#c9650a" stroke-width="1.8" stroke-linecap="round"/><circle cx="12.6" cy="8.3" r="1.5" fill="#2a2018"/></svg></button></div>
+  </div>
+  <div class="tools">
+    <button id="undoBtn" type="button" aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" aria-keyshortcuts="Control+Z"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 6H13a4.5 4.5 0 0 1 0 9H8" fill="none" stroke="#2a2018" stroke-width="2.2" stroke-linecap="round"/><path d="M9.5 2.5 6 6l3.5 3.5" fill="none" stroke="#2a2018" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="cap">Undo</span></button>
+    <button id="redoBtn" type="button" aria-label="Redo (Ctrl+Shift+Z)" title="Redo (Ctrl+Shift+Z)" aria-keyshortcuts="Control+Shift+Z"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13 6H7a4.5 4.5 0 0 0 0 9h5" fill="none" stroke="#2a2018" stroke-width="2.2" stroke-linecap="round"/><path d="M10.5 2.5 14 6l-3.5 3.5" fill="none" stroke="#2a2018" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="cap">Redo</span></button>
+    <button id="demosBtn" type="button" aria-haspopup="dialog" aria-label="Demo songs" title="Demo songs"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 15.5V4.5l9-2v11" fill="none" stroke="#3b1f00" stroke-width="1.8" stroke-linejoin="round"/><circle cx="5" cy="15.5" r="2.4" fill="#3b1f00"/><circle cx="14" cy="13.5" r="2.4" fill="#3b1f00"/></svg><span class="lbl">Demos</span><span class="cap">Songs</span></button>
+    <button id="menuBtn" type="button" aria-haspopup="dialog" aria-label="Save and share" title="Save and share"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 11v4.5h12V11M10 3v9M6.5 6.5 10 3l3.5 3.5" fill="none" stroke="#2a2018" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Save &amp; share</span><span class="cap">Save</span></button>
+    <button id="helpBtn" type="button" aria-label="How it works (H)" title="How it works (H)" aria-haspopup="dialog" aria-keyshortcuts="H"><span class="q">?</span><span class="cap">Help</span></button>
+  </div>
+</header>
+
+<nav id="tray" class="panel" aria-label="Pieces: drag onto the board, or tap then tap the board">
+  <span id="trayNext" class="nextchip" aria-live="off"></span>
+  <div class="pieces" id="trayPieces"></div>
+  <div class="viewctl">
+    <div class="row"><button id="zoomOutBtn" type="button" aria-label="Zoom out">−</button><button id="zoomInBtn" type="button" aria-label="Zoom in">+</button></div>
+    <div class="row"><button id="fitBtn" type="button" aria-label="Fit the board">Fit</button><button id="pathBtn" type="button" aria-pressed="true" aria-label="Show the marble path">Path</button></div>
+  </div>
+</nav>
+
+<aside id="inspector" class="panel" aria-label="Selected piece" hidden></aside>
+<div id="strip" class="panel" hidden><div class="t" id="stripTitle"></div><canvas id="stripCanvas" aria-hidden="true"></canvas><div class="btns"><button id="remixBtn" type="button">Remix</button><button id="backBtn" type="button" title="Open your own run again">My run</button></div></div>
+
+<div id="demos" class="scrim" role="dialog" aria-modal="true" aria-labelledby="demosTitle" hidden>
+  <div class="dialog panel">
+    <h2 id="demosTitle">Demo runs <button class="x" type="button" data-close aria-label="Close">×</button></h2>
+    <p class="sub">Every landing of a marble on a piece of metal is one note of the song. <b>Play</b> one, or <b>Remix</b> it into your own run.</p>
+    <div class="cards" id="demoCards"></div>
+  </div>
+</div>
+<div id="menu" class="scrim" role="dialog" aria-modal="true" aria-labelledby="menuTitle" hidden>
+  <div class="dialog panel">
+    <h2 id="menuTitle">Save &amp; share <button class="x" type="button" data-close aria-label="Close">×</button></h2>
+    <div class="mrow"><input type="text" id="nameInput" maxlength="60" aria-label="Name of this run" placeholder="Name your run"><button id="saveBtn" type="button">Save</button></div>
+    <ul class="slots" id="slotList" aria-label="Saved runs"></ul>
+    <div class="msec" id="recentSec" hidden><h3>Recent</h3><ul class="slots" id="recentList" aria-label="Your recent runs"></ul></div>
+    <div class="msec"><h3>Share</h3>
+      <div class="mrow"><button id="shareBtn" type="button">Copy share link</button><button id="exportBtn" type="button">Export .json</button><button id="importBtn" type="button">Import .json</button></div>
+      <textarea id="shareOut" readonly hidden aria-label="Share link"></textarea>
+    </div>
+    <div class="msec"><h3>Music</h3>
+      <div class="mrow"><label for="scaleSel" style="font-weight:800">New pieces play</label><select id="scaleSel"></select></div>
+      <div class="mrow"><span style="font-weight:800">Beat speed</span><button id="tempoDown2" type="button" aria-label="Slower beat">−</button><output id="tempoVal2" style="font-weight:900;min-width:70px;text-align:center">100 beats a minute</output><button id="tempoUp2" type="button" aria-label="Faster beat">+</button></div>
+      <div class="mrow"><button id="metroBtn2" type="button" aria-pressed="false">Metronome off</button><button id="muteBtn" type="button" aria-pressed="false">Sound on</button></div>
+    </div>
+    <div class="msec"><h3>Board</h3><div class="mrow"><button id="clearBtn" type="button" class="danger">Clear the board</button><button id="twoDBtn" type="button" hidden>Use the simple 2D view</button></div></div>
+  </div>
+</div>
+<div id="coach" class="scrim" role="dialog" aria-modal="true" aria-labelledby="coachTitle" hidden>
+  <div class="dialog panel">
+    <h2 id="coachTitle" style="justify-content:center">Build a marble run that plays music</h2>
+    <p class="sub" style="text-align:center">Every piece of metal rings like a piano key when a marble lands on it.</p>
+    <ol class="steps">
+      <li><svg viewBox="0 0 220 130" aria-hidden="true"><rect x="8" y="8" width="204" height="114" rx="10" fill="#8f6a45"/><g fill="#3a2414" opacity=".55"><circle cx="30" cy="30" r="3"/><circle cx="60" cy="30" r="3"/><circle cx="90" cy="30" r="3"/><circle cx="120" cy="30" r="3"/><circle cx="150" cy="30" r="3"/><circle cx="180" cy="30" r="3"/><circle cx="30" cy="60" r="3"/><circle cx="60" cy="60" r="3"/><circle cx="90" cy="60" r="3"/><circle cx="120" cy="60" r="3"/><circle cx="150" cy="60" r="3"/><circle cx="180" cy="60" r="3"/><circle cx="30" cy="90" r="3"/><circle cx="60" cy="90" r="3"/><circle cx="90" cy="90" r="3"/><circle cx="120" cy="90" r="3"/><circle cx="150" cy="90" r="3"/><circle cx="180" cy="90" r="3"/></g><rect x="118" y="46" width="60" height="11" rx="3" fill="#f0d02a" opacity=".35" stroke="#fff" stroke-dasharray="4 3"/><g class="ill-drag"><rect x="44" y="104" width="60" height="11" rx="3" fill="#f0d02a" stroke="#2a2018" stroke-width="1.5"/><path d="M92 116l-2 12 6-5 7 7 3-3-7-7 7-2z" fill="#fff" stroke="#2a2018" stroke-width="1.5"/></g></svg>
+        <b><i>1</i>Add metal</b><span><span class="t-mouse"><em>Drag</em> pieces from the tray onto the pegboard.</span><span class="t-touch"><em>Tap</em> a piece in the tray, then tap the pegboard.</span> Each new piece plays the next note.</span></li>
+      <li><svg viewBox="0 0 220 130" aria-hidden="true"><rect x="8" y="8" width="204" height="114" rx="10" fill="#8f6a45"/><rect x="36" y="10" width="18" height="26" rx="3" fill="#d8a445" stroke="#2a2018" stroke-width="1.5"/><path d="M45 40 q2 30 30 40 q30 10 60 5 q30 -5 50 20" fill="none" stroke="#fff" stroke-width="2.5" stroke-dasharray="1 7" stroke-linecap="round"/><g fill="#fff" stroke="#2a2018" stroke-width="1.5"><circle cx="46" cy="58" r="4.5"/><circle cx="80" cy="82" r="4.5"/><circle cx="125" cy="86" r="4.5"/><circle cx="170" cy="86" r="4.5"/></g><rect x="108" y="92" width="36" height="8" rx="2" fill="#3d6bdb" stroke="#2a2018" stroke-width="1.2"/><circle class="ill-ring" cx="125" cy="86" r="9" fill="none" stroke="#ffd54a" stroke-width="3"/><rect x="112" y="64" width="26" height="14" rx="7" fill="#3d6bdb"/><text x="125" y="75" font-size="10" font-weight="900" fill="#fff" text-anchor="middle" font-family="sans-serif">A4</text></svg>
+        <b><i>2</i>Follow the dots</b><span>The line shows where a marble will roll; each <em>ring is a beat</em>. Drag a bar near a ring and it snaps on, ringing right on the beat.</span></li>
+      <li><svg viewBox="0 0 220 130" aria-hidden="true"><rect x="8" y="8" width="204" height="114" rx="10" fill="#8f6a45"/><rect x="40" y="36" width="44" height="9" rx="3" fill="#e5392f" transform="rotate(14 62 40)"/><rect x="92" y="62" width="44" height="9" rx="3" fill="#f0d02a" transform="rotate(-14 114 66)"/><rect x="140" y="88" width="44" height="9" rx="3" fill="#3d6bdb" transform="rotate(14 162 92)"/><g class="ill-marble"><circle cx="60" cy="26" r="7" fill="#4f9be8" stroke="#fff" stroke-width="1.5"/></g><g transform="translate(150 20)"><circle r="17" fill="#2fb463" stroke="#1f8a49" stroke-width="2"/><path d="M-5 -8v16l13-8z" fill="#fff"/></g><text x="100" y="30" font-size="18" fill="#fff" font-family="sans-serif">♪ ♫</text></svg>
+        <b><i>3</i>Press Play</b><span>Droppers release marbles and your run plays its tune. Open <em>Demos</em> for songs made of marbles!</span></li>
+    </ol>
+    <div class="coach-go"><button id="coachGo" type="button">Let's build!</button><small>Open this again with the <b>?</b> button.</small></div>
+  </div>
+</div>
+<div id="toast"></div>
+<p class="sr-only" id="srStatus" aria-live="polite"></p>
+<div id="loading" role="status" hidden><span class="panel"><b id="loadingMsg">Polishing the metal…</b><i class="progress" aria-hidden="true"><i id="loadingBar"></i></i></span></div>
+<input type="file" id="importFile" accept=".json,application/json" hidden>
+
+<script>
+'use strict';
