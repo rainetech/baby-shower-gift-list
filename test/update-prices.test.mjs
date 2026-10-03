@@ -71,6 +71,12 @@ describe("applyAmazonPrices", () => {
     assert.equal(report.acknowledged, 1);
   });
 
+  it("does not keep reporting a wishlist item the host chose to leave off the site", () => {
+    const scrape = [scraped("A", 100), scraped("B", 50), scraped("C", 20), scraped("D", 10), scraped("E", 10), scraped("Z", 5)];
+    assert.deepEqual(applyAmazonPrices(gifts, scrape).report.added.map((r) => r.id), ["Z"]);
+    assert.deepEqual(applyAmazonPrices(gifts, scrape, { acknowledged: new Set(["Z"]) }).report.added, []);
+  });
+
   it("only ever changes the price field", () => {
     const { gifts: next } = applyAmazonPrices(gifts, [scraped("A", 110), scraped("B", 55), scraped("C", 21), scraped("D", 11), scraped("E", 9)]);
     next.forEach((g, i) => assert.deepEqual({ ...g, price: null }, { ...gifts[i], price: null }));

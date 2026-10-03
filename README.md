@@ -47,7 +47,7 @@ It needs Node 22.21 or newer and no packages. Safety rules, all listed in the re
 
 If something needs a look (a held price, a gift added to or missing from the Amazon wishlist, a gift bought on Amazon, or a failed run), the run opens one issue labelled `price-review` with the report, keeps it up to date, and closes it once everything is clear. The full report is also on each run's summary page.
 
-`scripts/held-ignore.json` lists gifts whose Amazon price from the server differs a lot from what you see in the UAE. Their price on the site is left alone and they don't raise an issue. Remove an id from the list to have it flagged again.
+`scripts/ignore.json` lists gifts the host has already looked at. A gift on it keeps its price on the site however far Amazon's price moves (Amazon shows some items at a different price depending on location), and a wishlist item on it that is deliberately not on the site isn't reported as new. Remove an id from the list to have it flagged again.
 
 ## Previewing locally
 

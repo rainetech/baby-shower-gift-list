@@ -72,7 +72,7 @@ let amazonDate = previousAmazonDate;
 
 try {
   const scraped = await fetchWishlist(createFetcher());
-  const acknowledged = new Set(JSON.parse(readFileSync(new URL("./held-ignore.json", import.meta.url), "utf8")));
+  const acknowledged = new Set(JSON.parse(readFileSync(new URL("./ignore.json", import.meta.url), "utf8")));
   const applied = applyAmazonPrices(gifts, scraped, { acknowledged });
   nextGifts = applied.gifts;
   result.amazon = applied.report;

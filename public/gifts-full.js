@@ -248,13 +248,6 @@ export const gifts = [
     "amazonUrl": "https://www.amazon.ae/dp/B0030BEW96/"
   },
   {
-    "id": "B071HN7DYP",
-    "name": "Infantino Sensory Balls Blocks & Buddies",
-    "price": "AED 15.01",
-    "image": "assets/B071HN7DYP.jpg",
-    "amazonUrl": "https://www.amazon.ae/dp/B071HN7DYP/"
-  },
-  {
     "id": "B08X5W2GVF",
     "name": "ClevaRinse™ Shampoo Rinse Cup 500 ml - Pink",
     "price": "AED 35.00",
