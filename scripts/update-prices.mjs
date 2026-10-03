@@ -1,16 +1,14 @@
 #!/usr/bin/env node
-// Refreshes Amazon.ae wishlist prices and the other-retailer prices, then rewrites
-// public/gifts-full.js and public/alternative-prices.js.
+// Refreshes the Amazon.ae wishlist prices and rewrites public/gifts-full.js.
 //
-//   node scripts/update-prices.mjs [--dry-run] [--skip-amazon] [--skip-retailers]
+//   node scripts/update-prices.mjs [--dry-run]
 //
-// Prints a Markdown report. Exit code 0 = ran (check the report), 1 = nothing could be refreshed.
+// Prints a Markdown report. Exit code 0 = ran (check the report), 1 = the prices could not be refreshed.
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { fetchWishlist } from "./lib/amazon.mjs";
-import { extractOffer } from "./lib/retailers.mjs";
-import { applyAmazonPrices, applyRetailerChecks, renderAlternativesModule, renderGiftsModule, renderReport } from "./lib/update.mjs";
+import { applyAmazonPrices, renderGiftsModule, renderReport } from "./lib/update.mjs";
 
 // Node's fetch ignores proxy settings unless NODE_USE_ENV_PROXY is set (Node 22.21+); sandboxed
 // environments need it, so relaunch once with it on.
@@ -69,52 +67,24 @@ const today = gulfToday();
 const result = { today, wrote: false };
 
 const { gifts, amazonPricesCheckedOn: previousAmazonDate } = await load("gifts-full.js");
-const alternatives = await load("alternative-prices.js");
 let nextGifts = gifts;
 let amazonDate = previousAmazonDate;
-let nextAlternatives = { priceCheckDate: alternatives.priceCheckDate, alternativePrices: alternatives.alternativePrices };
 
-if (!args.has("--skip-amazon")) {
-  try {
-    const scraped = await fetchWishlist(createFetcher());
-    const acknowledged = new Set(JSON.parse(readFileSync(new URL("./held-ignore.json", import.meta.url), "utf8")));
-    const applied = applyAmazonPrices(gifts, scraped, { acknowledged });
-    nextGifts = applied.gifts;
-    result.amazon = applied.report;
-    amazonDate = today;
-  } catch (error) {
-    result.amazonError = error.message;
-  }
+try {
+  const scraped = await fetchWishlist(createFetcher());
+  const acknowledged = new Set(JSON.parse(readFileSync(new URL("./held-ignore.json", import.meta.url), "utf8")));
+  const applied = applyAmazonPrices(gifts, scraped, { acknowledged });
+  nextGifts = applied.gifts;
+  result.amazon = applied.report;
+  amazonDate = today;
+} catch (error) {
+  result.amazonError = error.message;
 }
 
-if (!args.has("--skip-retailers")) {
-  try {
-    const get = createFetcher();
-    const urls = [...new Set(Object.values(nextAlternatives.alternativePrices).flat().map((offer) => offer.url))];
-    const checks = new Map();
-    for (const url of urls) {
-      try {
-        const offer = extractOffer(await get(url), url);
-        checks.set(url, offer ? { ok: true, ...offer } : { ok: false, reason: "no price found on the page" });
-      } catch (error) {
-        checks.set(url, { ok: false, reason: error.message });
-      }
-      await sleep(400);
-    }
-    const applied = applyRetailerChecks(nextAlternatives, checks, { today });
-    nextAlternatives = applied.alternatives;
-    result.retailers = applied.report;
-  } catch (error) {
-    result.retailerError = error.message;
-  }
-}
-
-const refreshedAnything = Boolean(result.amazon || result.retailers);
-if (refreshedAnything && !args.has("--dry-run")) {
+if (result.amazon && !args.has("--dry-run")) {
   writeFileSync(root + "gifts-full.js", renderGiftsModule(nextGifts, amazonDate));
-  writeFileSync(root + "alternative-prices.js", renderAlternativesModule(nextAlternatives, nextGifts));
   result.wrote = true;
 }
 
 console.log(renderReport(result));
-process.exit(refreshedAnything ? 0 : 1);
+process.exit(result.amazon ? 0 : 1);

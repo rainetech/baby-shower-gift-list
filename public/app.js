@@ -3,7 +3,6 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword } from "https:/
 import { collection, doc, getFirestore, onSnapshot, serverTimestamp, setDoc } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 import { firebaseConfig, registryUserEmail } from "./firebase-config.js";
 import { amazonPricesCheckedOn, gifts } from "./gifts-full.js";
-import { alternativePrices, priceCheckDate } from "./alternative-prices.js";
 
 const REGISTRY_ID = "rochelle-and-christopher";
 
@@ -22,7 +21,6 @@ const accessMessage = document.querySelector("#access-message");
 const giftGrid = document.querySelector("#gift-grid");
 const giftSummary = document.querySelector("#gift-summary");
 const giftTemplate = document.querySelector("#gift-template");
-const offerTemplate = document.querySelector("#offer-template");
 const priceFilter = document.querySelector("#price-filter");
 const sortSelect = document.querySelector("#sort-select");
 const reserveDialog = document.querySelector("#reserve-dialog");
@@ -57,15 +55,6 @@ function setBusy(form, busy) {
 function priceValue(label) {
   const match = label.match(/[\d,.]+/);
   return match ? Number(match[0].replaceAll(",", "")) : null;
-}
-
-function comparisonLabel(amazonPrice, alternativePrice) {
-  if (amazonPrice === null) return "Alternative price";
-  const difference = Math.abs(amazonPrice - alternativePrice);
-  if (difference < 0.01) return "Same listed price";
-  return alternativePrice < amazonPrice
-    ? `Save AED ${difference.toFixed(2)} here`
-    : `Amazon is AED ${difference.toFixed(2)} less`;
 }
 
 const entries = gifts.map((gift, index) => ({ gift, index, amazonPrice: priceValue(gift.price) }));
@@ -108,59 +97,11 @@ function renderPriceFilter() {
   });
 }
 
-function renderOffers(fragment, gift, amazonPrice) {
-  // Sold-out offers stay in the data (so they can come back) but are not shown. Priced offers come
-  // first, cheapest first; link-only offers (no price checked) follow.
-  const offers = (alternativePrices[gift.id] ?? [])
-    .filter((offer) => !offer.soldOut)
-    .sort((a, b) => (a.value ?? Infinity) - (b.value ?? Infinity));
-  if (!offers.length) return;
-
-  // Offers without `checked` were verified on priceCheckDate. Older snapshots carry their own date
-  // and are not used for the saving label unless they are all we have.
-  const isCurrent = (offer) => !offer.checked || offer.checked === priceCheckDate;
-  const priced = offers.filter((offer) => offer.value != null);
-  const basis = priced.find(isCurrent) ?? priced[0];
-
-  const comparison = fragment.querySelector(".price-comparison");
-  const list = fragment.querySelector(".offer-list");
-  comparison.hidden = false;
-  fragment.querySelector(".comparison-title").textContent = offers.length > 1 ? "Exact UAE matches" : "Exact UAE match";
-  fragment.querySelector(".price-checked").textContent = basis
-    ? `Prices checked ${isCurrent(basis) ? priceCheckDate : basis.checked}`
-    : "Price not checked, please look at the retailer";
-  if (basis) {
-    fragment.querySelector(".saving-label").textContent = comparisonLabel(amazonPrice, basis.value);
-    if (amazonPrice !== null && basis.value < amazonPrice) comparison.classList.add("is-cheaper");
-  }
-
-  offers.forEach((offer) => {
-    const item = offerTemplate.content.cloneNode(true);
-    const link = item.querySelector(".alternative-link");
-    const linkOnly = offer.value == null;
-    const age = linkOnly || isCurrent(offer) ? "" : ` (price from ${offer.checked})`;
-    link.href = offer.url;
-    link.setAttribute("aria-label", linkOnly
-      ? `View ${gift.name} at ${offer.retailer} (price not checked)`
-      : `View ${gift.name} at ${offer.retailer} for ${offer.price}${age}`);
-    item.querySelector(".retailer-label").textContent = offer.retailer;
-    if (!linkOnly && !isCurrent(offer)) {
-      const date = item.querySelector(".offer-date");
-      date.hidden = false;
-      date.textContent = `as of ${offer.checked.replace(/ \d{4}$/, "")}`;
-    }
-    const price = item.querySelector(".alternative-price");
-    price.textContent = linkOnly ? "Check price" : offer.price;
-    if (linkOnly) price.classList.add("is-link-only");
-    list.append(item);
-  });
-}
-
 function renderGifts() {
   giftGrid.replaceChildren();
   const visible = visibleEntries();
 
-  visible.forEach(({ gift, amazonPrice }) => {
+  visible.forEach(({ gift }) => {
     const fragment = giftTemplate.content.cloneNode(true);
     const card = fragment.querySelector(".gift-card");
     const image = fragment.querySelector("img");
@@ -176,8 +117,6 @@ function renderGifts() {
     giftHeading.textContent = gift.name;
     giftHeading.title = gift.name;
     fragment.querySelector(".description").textContent = gift.description || "";
-
-    renderOffers(fragment, gift, amazonPrice);
 
     const amazonLink = fragment.querySelector(".amazon-link");
     amazonLink.href = gift.amazonUrl;
@@ -293,7 +232,7 @@ reserveDialog.addEventListener("click", (event) => {
   if (event.target === reserveDialog) reserveDialog.close();
 });
 
-priceFootnote.textContent = `Amazon prices checked ${amazonPricesCheckedOn}; other UAE retailers checked ${priceCheckDate}. Prices are snapshots and may change. Delivery charges are not included.`;
+priceFootnote.textContent = `Amazon prices checked ${amazonPricesCheckedOn}. Prices are snapshots and may change. Delivery charges are not included.`;
 renderPriceFilter();
 
 onAuthStateChanged(auth, (user) => {

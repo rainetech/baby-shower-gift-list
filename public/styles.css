@@ -236,21 +236,6 @@ select { min-height: 42px; padding: 0 12px; color: var(--ink); background: white
 }
 .description { margin: 0 0 20px; color: var(--muted); font-size: .87rem; line-height: 1.55; }
 .description:empty { display: none; }
-.price-comparison { margin: 0 0 18px; padding: 12px; background: #f8f5ef; border: 1px solid #ebe3d5; border-radius: 13px; }
-.comparison-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
-.comparison-head span { color: var(--muted); font-size: .64rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.saving-label { color: var(--sage-dark); font-size: .68rem; }
-.price-comparison.is-cheaper { background: #edf5eb; border-color: #d4e5d0; }
-.price-comparison.is-cheaper .saving-label { padding: 4px 7px; color: white; background: var(--sage-dark); border-radius: 999px; }
-.offer-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
-.offer-list li + li { padding-top: 7px; border-top: 1px dashed #ddd2c0; }
-.alternative-link { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; color: var(--berry); text-decoration: none; }
-.alternative-link:hover .retailer-name { text-decoration: underline; }
-.retailer-name { font-size: .78rem; font-weight: 700; }
-.offer-date { margin-left: 6px; color: #93878b; font-size: .62rem; font-weight: 500; }
-.alternative-price { font-size: .84rem; }
-.alternative-price.is-link-only { color: var(--muted); font-size: .74rem; font-weight: 600; }
-.price-checked { display: block; margin-top: 6px; color: #93878b; font-size: .62rem; }
 .gift-actions { display: flex; align-items: center; gap: 10px; margin-top: auto; }
 .amazon-link { color: var(--berry); font-size: .8rem; font-weight: 700; text-decoration: none; }
 .amazon-link:hover { text-decoration: underline; }

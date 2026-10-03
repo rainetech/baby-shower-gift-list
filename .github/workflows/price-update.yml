@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # commit the refreshed price files to main
+  contents: write # commit the refreshed Amazon prices to main
   actions: write  # start the Pages deploy (pushes made with GITHUB_TOKEN don't trigger it)
   issues: write   # open an issue when something needs a look
 
@@ -53,7 +53,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/gifts-full.js public/alternative-prices.js
+          git add public/gifts-full.js
           git commit -m "Update prices $(date -u +%Y-%m-%d)"
           git pull --rebase origin main
           git push origin HEAD:main
@@ -68,7 +68,7 @@ jobs:
         run: |
           needs=false
           if [ "$STATUS" != "0" ]; then needs=true; fi
-          if [ -f price-report.md ] && grep -qE '^## (HELD FOR REVIEW|Wishlist items not found|New on the Amazon wishlist|Bought on Amazon|Amazon step FAILED|Retailer step FAILED)' price-report.md; then needs=true; fi
+          if [ -f price-report.md ] && grep -qE '^## (HELD FOR REVIEW|Wishlist items not found|New on the Amazon wishlist|Bought on Amazon|Amazon step FAILED)' price-report.md; then needs=true; fi
 
           number=$(gh issue list --state open --label price-review --json number --jq '.[0].number // empty')
           if [ "$needs" = "true" ]; then
