@@ -2,14 +2,14 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isRegistryGuest() {
-      return request.auth != null && request.auth.uid == "sW87PrnhWpgglLkmKHkpIIle5ET2";
-    }
-
+    // The site has no public sign-up: the only Firebase account that can ever be signed in is the
+    // shared guest account, created and reset by the host through the Firebase Console. So any
+    // signed-in user is that guest account, and resetting its password (or recreating it) never
+    // needs a rules change, because this no longer names a specific user id.
     match /registries/rochelle-and-christopher/reservations/{itemId} {
-      allow read: if isRegistryGuest();
+      allow read: if request.auth != null;
 
-      allow create: if isRegistryGuest()
+      allow create: if request.auth != null
         && request.resource.data.keys().hasOnly(["itemId", "name", "reservedAt"])
         && request.resource.data.itemId == itemId
         && request.resource.data.name is string
