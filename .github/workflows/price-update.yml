@@ -1,0 +1,88 @@
+name: Update prices
+
+on:
+  schedule:
+    - cron: "7 2 * * *" # 06:07 in the UAE (UTC+4)
+  workflow_dispatch:
+
+permissions:
+  contents: write # commit the refreshed price files to main
+  actions: write  # start the Pages deploy (pushes made with GITHUB_TOKEN don't trigger it)
+  issues: write   # open an issue when something needs a look
+
+concurrency:
+  group: price-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run tests
+        run: node --test "test/*.test.mjs"
+
+      - name: Refresh prices
+        id: refresh
+        shell: bash
+        run: |
+          set +e
+          node scripts/update-prices.mjs > price-report.md
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          cat price-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish changes
+        if: steps.refresh.outputs.status == '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- public; then
+            echo "No price changes to publish."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/gifts-full.js public/alternative-prices.js
+          git commit -m "Update prices $(date -u +%Y-%m-%d)"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          gh workflow run pages.yml --ref main
+
+      - name: Flag anything that needs a look
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.refresh.outputs.status }}
+        run: |
+          needs=false
+          if [ "$STATUS" != "0" ]; then needs=true; fi
+          if [ -f price-report.md ] && grep -qE '^## (HELD FOR REVIEW|Wishlist items not found|New on the Amazon wishlist|Bought on Amazon|Amazon step FAILED|Retailer step FAILED)' price-report.md; then needs=true; fi
+
+          number=$(gh issue list --state open --label price-review --json number --jq '.[0].number // empty')
+          if [ "$needs" = "true" ]; then
+            {
+              echo "Latest run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              echo
+              cat price-report.md 2>/dev/null || echo "The price script did not produce a report. Check the run log."
+            } > issue-body.md
+            gh label create price-review --color FBCA04 --description "The morning price update needs the host's attention" 2>/dev/null || true
+            if [ -n "$number" ]; then
+              gh issue edit "$number" --body-file issue-body.md
+            else
+              gh issue create --title "Gift list prices need a look" --label price-review --body-file issue-body.md
+            fi
+          elif [ -n "$number" ]; then
+            gh issue close "$number" --comment "Nothing needs a look in the latest run."
+          fi

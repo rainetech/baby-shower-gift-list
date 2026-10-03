@@ -65,6 +65,19 @@ describe("applyAmazonPrices", () => {
     assert.equal(report.unchanged, 3);
   });
 
+  it("keeps quiet about big moves the host has already acknowledged, and still keeps the old price", () => {
+    const { gifts: next, report } = applyAmazonPrices(gifts, [scraped("A", 100), scraped("B", 91.25), scraped("C", 40), scraped("D", 10), scraped("E", 10)], { acknowledged: new Set(["B"]) });
+    assert.equal(next[1].price, "AED 50.00");
+    assert.deepEqual(report.held.map((r) => r.id), ["C"]);
+    assert.equal(report.acknowledged, 1);
+  });
+
+  it("only ever changes the price field", () => {
+    const { gifts: next } = applyAmazonPrices(gifts, [scraped("A", 110), scraped("B", 55), scraped("C", 21), scraped("D", 11), scraped("E", 9)]);
+    next.forEach((g, i) => assert.deepEqual({ ...g, price: null }, { ...gifts[i], price: null }));
+    assert.equal(next.length, gifts.length);
+  });
+
   it("does not touch gifts missing from the scrape, and reports additions and Amazon purchases", () => {
     const { gifts: next, report } = applyAmazonPrices(gifts, [scraped("A", 100, { purchased: 1 }), scraped("B", 50), scraped("C", 20), scraped("D", 10), scraped("Z", 5)]);
     assert.equal(next[4].price, "AED 10.00");

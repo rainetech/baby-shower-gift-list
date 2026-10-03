@@ -5,13 +5,13 @@ const round2 = (value) => Number(Number(value).toFixed(2));
 // Applies freshly scraped Amazon prices to the gift list. A price that moved by more than `maxChange`
 // is held back for the host to look at: Amazon sometimes shows a different offer depending on where
 // the page is fetched from, and a wrong price on the site is worse than a stale one.
-export function applyAmazonPrices(gifts, scraped, { maxChange = 0.25 } = {}) {
+export function applyAmazonPrices(gifts, scraped, { maxChange = 0.25, acknowledged = new Set() } = {}) {
   if (!scraped.length || scraped.length < gifts.length * 0.8) {
     throw new Error(`Wishlist scrape looks incomplete (${scraped.length} items for ${gifts.length} gifts); nothing changed.`);
   }
 
   const byAsin = new Map(scraped.map((item) => [item.asin, item]));
-  const report = { applied: [], held: [], unchanged: 0, missing: [], added: [], boughtOnAmazon: [] };
+  const report = { applied: [], held: [], acknowledged: 0, unchanged: 0, missing: [], added: [], boughtOnAmazon: [] };
 
   const next = gifts.map((gift) => {
     const item = byAsin.get(gift.id);
@@ -28,7 +28,9 @@ export function applyAmazonPrices(gifts, scraped, { maxChange = 0.25 } = {}) {
       return gift;
     }
     if (from !== null && Math.abs(to - from) / from > maxChange) {
-      report.held.push({ id: gift.id, name: gift.name, from, to });
+      // Items the host has already looked at keep their price and stay quiet.
+      if (acknowledged.has(gift.id)) report.acknowledged += 1;
+      else report.held.push({ id: gift.id, name: gift.name, from, to });
       return gift;
     }
     report.applied.push({ id: gift.id, name: gift.name, from, to });
@@ -133,7 +135,7 @@ export function renderReport({ today, amazon, amazonError, retailers, retailerEr
 
   if (amazonError) section("Amazon step FAILED, nothing changed", [`- ${amazonError}`]);
   if (amazon) {
-    lines.push(`Amazon: ${amazon.applied.length} updated, ${amazon.unchanged} unchanged, ${amazon.held.length} held for review.`, "");
+    lines.push(`Amazon: ${amazon.applied.length} updated, ${amazon.unchanged} unchanged, ${amazon.held.length} held for review${amazon.acknowledged ? `, ${amazon.acknowledged} already acknowledged in scripts/held-ignore.json` : ""}.`, "");
     section("Amazon prices updated", amazon.applied.map((r) => `- ${short(r.name)}: ${r.from === null ? "n/a" : money(r.from)} to ${money(r.to)}`));
     section("HELD FOR REVIEW (moved more than 25%, not applied)", amazon.held.map((r) => `- ${short(r.name)} (${r.id}): ${money(r.from)} on the site, ${money(r.to)} on Amazon now`));
     section("Wishlist items not found on Amazon (not removed from the site)", amazon.missing.map((r) => `- ${short(r.name)} (${r.id})`));

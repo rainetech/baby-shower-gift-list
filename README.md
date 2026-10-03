@@ -47,6 +47,14 @@ It needs Node 22.21 or newer and no packages. Safety rules, all listed in the re
 - A retailer page that can't be read is left as it was and dated. Several sites (Noon, Lulu, Sharaf DG, Babyshop, Carrefour, Union Coop, Waitrose) often block automated requests.
 - FirstCry only tells the script a product is in stock when its page data shows a quantity above 0. A quantity of 0 is read as "unknown", because it also appears on products that can be bought.
 
+### Every morning, automatically
+
+`.github/workflows/price-update.yml` runs the script at 06:07 UAE time. If prices changed it commits the two data files to `main` and starts the Pages deploy, so the live site updates by itself. Nothing needs setting up. To run it right now: GitHub, Actions, "Update prices", "Run workflow".
+
+If something needs a look (a held price, a gift added to or missing from the Amazon wishlist, a gift bought on Amazon, or a failed run), the run opens one issue labelled `price-review` with the report, keeps it up to date, and closes it once everything is clear. The full report is also on each run's summary page.
+
+`scripts/held-ignore.json` lists gifts whose Amazon price from the server differs a lot from what you see in the UAE (Amazon shows some items at a different price depending on location). Their price on the site is left alone and they don't raise an issue. Remove an id from the list to have it flagged again.
+
 ## Previewing locally
 
 ```sh

@@ -6,7 +6,7 @@
 //
 // Prints a Markdown report. Exit code 0 = ran (check the report), 1 = nothing could be refreshed.
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { fetchWishlist } from "./lib/amazon.mjs";
 import { extractOffer } from "./lib/retailers.mjs";
@@ -77,7 +77,8 @@ let nextAlternatives = { priceCheckDate: alternatives.priceCheckDate, alternativ
 if (!args.has("--skip-amazon")) {
   try {
     const scraped = await fetchWishlist(createFetcher());
-    const applied = applyAmazonPrices(gifts, scraped);
+    const acknowledged = new Set(JSON.parse(readFileSync(new URL("./held-ignore.json", import.meta.url), "utf8")));
+    const applied = applyAmazonPrices(gifts, scraped, { acknowledged });
     nextGifts = applied.gifts;
     result.amazon = applied.report;
     amazonDate = today;
