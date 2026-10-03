@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { fetchWishlist, isBotCheck, nextPageUrl, parseWishlistPage } from "../scripts/lib/amazon.mjs";
 import { decodeEntities, formatAed, parseAed } from "../scripts/lib/html.mjs";
+import { changePin, derivePassword } from "../scripts/lib/pin.mjs";
 import { fetchReservedIds } from "../scripts/lib/reservations.mjs";
 import { applyAmazonPrices, renderGiftsModule, renderReport } from "../scripts/lib/update.mjs";
 
@@ -177,5 +178,52 @@ describe("renderReport", () => {
 
   it("omits the links for a local run", () => {
     assert.ok(!renderReport({ today: "4 Oct 2026", amazon }).includes("issues/new"));
+  });
+});
+
+describe("changePin", () => {
+  const firebaseConfig = { apiKey: "KEY" };
+  const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
+  const script = (...replies) => {
+    const calls = [];
+    const fn = async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return replies.shift()(); };
+    fn.calls = calls;
+    return fn;
+  };
+
+  it("derives the password the way the site does", () => {
+    assert.equal(derivePassword("1126"), "registry-1126-access");
+  });
+
+  it("signs in with the old PIN, sets the new password, then proves the new PIN works", async () => {
+    const fetchImpl = script(() => json(200, { idToken: "OLDTOKEN" }), () => json(200, { localId: "u" }), () => json(200, { idToken: "NEWTOKEN" }));
+    assert.equal(await changePin({ firebaseConfig, email: "g@example.test", oldPin: "1111", newPin: "1126", fetchImpl }), true);
+    const [signIn, update, verify] = fetchImpl.calls;
+    assert.match(signIn.url, /accounts:signInWithPassword\?key=KEY$/);
+    assert.equal(signIn.body.password, "registry-1111-access");
+    assert.match(update.url, /accounts:update\?key=KEY$/);
+    assert.deepEqual(update.body, { idToken: "OLDTOKEN", password: "registry-1126-access", returnSecureToken: false });
+    assert.equal(verify.body.password, "registry-1126-access");
+  });
+
+  it("changes nothing, and says so, when the current PIN is wrong", async () => {
+    const fetchImpl = script(() => json(400, { error: { message: "INVALID_LOGIN_CREDENTIALS" } }));
+    await assert.rejects(changePin({ firebaseConfig, email: "e", oldPin: "9999", newPin: "1126", fetchImpl }), (e) => /current PIN was not accepted/.test(e.message) && /nothing was changed/.test(e.message));
+    assert.equal(fetchImpl.calls.length, 1);
+  });
+
+  it("reports a refused change or a failed check without leaking either PIN", async () => {
+    const refused = script(() => json(200, { idToken: "T" }), () => json(400, { error: { message: "WEAK_PASSWORD" } }));
+    await assert.rejects(changePin({ firebaseConfig, email: "e", oldPin: "1111", newPin: "1126", fetchImpl: refused }), (e) => /still works/.test(e.message) && !/1111|1126/.test(e.message));
+    const unverified = script(() => json(200, { idToken: "T" }), () => json(200, {}), () => json(400, { error: { message: "INVALID_LOGIN_CREDENTIALS" } }));
+    await assert.rejects(changePin({ firebaseConfig, email: "e", oldPin: "1111", newPin: "1126", fetchImpl: unverified }), (e) => /new PIN did not work/.test(e.message) && !/1111|1126/.test(e.message));
+  });
+
+  it("insists on two different 4-digit PINs before calling anything", async () => {
+    const fetchImpl = script();
+    for (const [oldPin, newPin] of [["111", "1126"], ["1111", "11260"], ["abcd", "1126"], [undefined, "1126"], ["1126", "1126"]]) {
+      await assert.rejects(changePin({ firebaseConfig, email: "e", oldPin, newPin, fetchImpl }), /4 digits|same as the current/);
+    }
+    assert.equal(fetchImpl.calls.length, 0);
   });
 });

@@ -1,3 +1,5 @@
+import { derivePassword } from "./pin.mjs";
+
 const REGISTRY_ID = "rochelle-and-christopher";
 
 // Signs in as the shared guest account the same way the site does (email plus a password derived
@@ -9,7 +11,7 @@ export async function fetchReservedIds({ firebaseConfig, email, code, fetchImpl 
   const signIn = await fetchImpl(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${firebaseConfig.apiKey}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: `registry-${code}-access`, returnSecureToken: true })
+    body: JSON.stringify({ email, password: derivePassword(code), returnSecureToken: true })
   });
   const auth = await signIn.json().catch(() => ({}));
   if (!signIn.ok || !auth.idToken) {
