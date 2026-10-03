@@ -119,7 +119,7 @@ async function buildGLAssets(onProgress) {
   const gens = [['peg', genPegboardTextures], ['metal', genMetalTextures], ['letters', genLetterTextures], ['wood', genWoodTextures],
     ['tape', genTapeTextures], ['misc', genMiscTextures], ['wall', genWallTextures], ['desk', genDeskTextures], ['note', genNoteTextures]];
   const mats = { peg: ['peg', { bias: -0.2 }], metal: ['metal'], letters: ['letters', { repeat: false }], wood: ['wood'], tape: ['tape'], misc: ['misc'],
-    wall: ['wall', { repeat: false, bias: 0.4 }], desk: ['desk', { bias: 0 }], note: ['note', { repeat: false }] };
+    wall: ['wall', { bias: 0.4 }], desk: ['desk', { bias: 0 }], note: ['note', { repeat: false }] };
   const total = gens.length + 3;
   let done = 0;
   const step = () => { done++; if (onProgress) onProgress(Math.min(1, done / total)); };
@@ -144,6 +144,7 @@ async function buildGLAssets(onProgress) {
   GLR.env = envOut.env;
   step();
   SCENE.builders = {};
+  const board = BOARD_W + 'x' + BOARD_H;
   if (!(await run('scene', buildScene))) return false;
   step();
   const meshes = [];
@@ -155,12 +156,31 @@ async function buildGLAssets(onProgress) {
   }))) return false;
   SCENE.builders = {};
   GLR.meshes = meshes;
+  GLR.sceneBoard = board;
   freeTexCanvases();
   step();
   GLR.ready = true;
   GLR.dirty = true;
   GLR.lastSig = GLR.shadowKey = null;
   return true;
+}
+
+// The room again for a board of another size (a few milliseconds: the textures stay)
+function rebuildScene() {
+  const gl = GLR.gl;
+  SCENE.builders = {};
+  const it = buildScene();
+  while (!it.next().done) { /* (all at once) */ }
+  const meshes = [];
+  for (const mat of Object.keys(SCENE.builders)) { const mesh = glMesh(gl, SCENE.builders[mat]); if (mesh) meshes.push({ mat, mesh }); }
+  SCENE.builders = {};
+  for (const m of GLR.meshes) { gl.deleteBuffer(m.mesh.vb); gl.deleteBuffer(m.mesh.ib); gl.deleteVertexArray(m.mesh.vao); }
+  GLR.meshes = meshes;
+  GLR.sceneBoard = BOARD_W + 'x' + BOARD_H;
+  GLR.lastSig = null; GLR.dirty = true;
+  SHADOW.view = null;
+  ROOM_FAR = roomFar();
+  setupWindowLight();
 }
 
 // Unit sphere, instanced per marble (the instance buffer grows with the number of marbles: see marbleSlots)
@@ -303,26 +323,56 @@ function resizeCanvases() {
 }
 
 /* ============================================================================
- *  CAMERA: frames the whole board (and its trough) in the screen area the HUD
- *  leaves free, from slightly above and to the right. The user can pan and zoom
- *  on top of that fit (VIEWCAM.zoom / pan in board units); "Fit" resets them.
- *  A lens shift keeps the camera level while the board sits off-centre.
+ *  CAMERA: a free orbit camera. The FIT frames the whole board (and its trough:
+ *  FIT_BOX) in the screen area the HUD leaves free, seen from the FRONT (yaw0 /
+ *  pitch0: slightly above and to the right); a lens shift keeps it level while
+ *  the board sits off-centre. On top of the fit: the user's pan (VIEWCAM.panX/Y,
+ *  board units: they move the TARGET, the point on the marble plane in the
+ *  middle of the free area), zoom (a dolly: distance = FIT.D / zoom; zoom 1 =
+ *  the whole board) and the ORBIT (CAMERA.yaw about the vertical, CAMERA.pitch:
+ *  eye up positive): the eye swings round the target, which stays put on the
+ *  screen, so a marble being followed is orbited. The board hangs on a wall, so
+ *  yaw keeps within +-75 deg and pitch within -25 (looking up) .. +65 (looking
+ *  down), and the eye never goes below the desk (pitchFloor). The screen <->
+ *  board measures the view logic relies on (pxPerUnit, viewSpan) are taken
+ *  front-on at the target, so the follow camera, the home zoom and the snap
+ *  tolerances are the same at any angle. 88-input.js drives the orbit
+ *  (drag, pinch, keys, the view widget, the cinematic swing); 90-main.js
+ *  exposes camera / setCamera / resetView. Picking and the overlay go through
+ *  project / unproject, so they are exact from any angle.
  * ========================================================================== */
 const view = { w: 0, h: 0, dpr: 1 };
 const VIEWCAM = { zoom: 1, panX: 0, panY: 0, version: 0, anim: null };
-const CAMERA = { pitch: 0.1, yaw: 0.07, fovDiag: 34 * Math.PI / 180 };
-const FIT_BOX = { x0: -FRAME_W - 18, x1: BOARD_W + FRAME_W + 18, y0: -FRAME_W - 18, y1: TROUGH.y1 + 8, z0: 0, z1: 30 };
+const CAMERA = {
+  yaw0: 0.07, pitch0: 0.1, fovDiag: 34 * Math.PI / 180,      // the front view (the fit is measured from here)
+  yaw: 0.07, pitch: 0.1,                                       // the orbit (radians)
+  yawMax: 75 * RAD, pitchMin: -25 * RAD, pitchMax: 65 * RAD,
+  autoYaw: 0, autoPitch: 0,                                    // the cinematic swing on top (stepOrbit)
+};
+const camDir = (yaw, pitch) => [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
+// The far plane reaches the whole room (60-scene.js roomExtent: the wall and desk run on a room's width beyond the
+// side walls, the wall from above the ceiling down to a floor line, the room z1 deep), so nothing is cut off at
+// the yaw limit however close the zoom
+let ROOM_FAR = 40000;
+function roomFar() {
+  const R = roomExtent(), x = Math.max(-(R.x0 - R.beyond), R.x1 + R.beyond), y = Math.max(-R.wallTop, R.floor);
+  return Math.max(40000, Math.hypot(x, y, R.z1) * 1.05);
+}
+// The lowest pitch at which the eye stays above the desk (looking up at the bottom of a tower); ty: the target's 3D y
+function pitchFloor(ty, D) { return Math.max(CAMERA.pitchMin, Math.asin(clamp((-DESK_Y + 40 - ty) / Math.max(1, D), -1, 1))); }
 function fitCamera(w, h, safe) {
   const aspect = w / h, diag = Math.hypot(w, h);
   const fovY = 2 * Math.atan(Math.tan(CAMERA.fovDiag / 2) * h / diag);
-  const dir = [Math.sin(CAMERA.yaw) * Math.cos(CAMERA.pitch), Math.sin(CAMERA.pitch), Math.cos(CAMERA.yaw) * Math.cos(CAMERA.pitch)];
-  const B = FIT_BOX, target = [(B.x0 + B.x1) / 2, -(B.y0 + B.y1) / 2, 10];
+  ROOM_FAR = roomFar();
+  const dir = camDir(CAMERA.yaw0, CAMERA.pitch0);
+  const B = FIT_BOX, target = [(B.x0 + B.x1) / 2, -(B.y0 + B.y1) / 2, ZM];
   const pts = [];
   for (const x of [B.x0, B.x1]) for (const y of [B.y0, B.y1]) for (const z of [B.z0, B.z1]) pts.push([x, -y, z]);
-  const build = (D, sx, sy, tg = target) => {
-    const eye = V3.add(tg, V3.scale(dir, D));
+  // (near: a tilted view sees the board plane much closer than the target; far: the whole room, ROOM_FAR)
+  const build = (D, sx, sy, tg = target, d = dir) => {
+    const eye = V3.add(tg, V3.scale(d, D));
     const viewM = M4.lookAt(eye, tg, [0, 1, 0]);
-    const proj = M4.persp(fovY, aspect, Math.max(20, D * 0.2), D * 4 + 6000, sx, sy);
+    const proj = M4.persp(fovY, aspect, Math.max(4, D * 0.04), Math.max(D * 4 + 6000, ROOM_FAR), sx, sy);
     return { eye, viewM, proj, vp: M4.mul(proj, viewM) };
   };
   const bbox = (vp) => {
@@ -349,7 +399,8 @@ function layout3D() {
   FIT = fitCamera(view.w, view.h, boardFitRect());
   applyCamera();
   resizeCanvases();
-  setupShadowFrusta();
+  SHADOW.view = null;
+  updateShadowRegion();
   setupWindowLight();
   GLR.layoutEpoch++;
   GLR.dirty = true;
@@ -357,65 +408,110 @@ function layout3D() {
 }
 function applyCamera() {
   if (!FIT) return;
-  const z = VIEWCAM.zoom, tg = [FIT.target[0] + VIEWCAM.panX, FIT.target[1] - VIEWCAM.panY, FIT.target[2]];
-  const c = FIT.build(FIT.D / z, FIT.sx, FIT.sy, tg);
-  GLR.cam = { eye: c.eye, target: tg, view: c.viewM, proj: c.proj, vp: c.vp, inv: M4.invert(c.vp), D: FIT.D / z, fovY: FIT.fovY };
+  const z = VIEWCAM.zoom, D = FIT.D / z, tg = [FIT.target[0] + VIEWCAM.panX, FIT.target[1] - VIEWCAM.panY, FIT.target[2]];
+  const yaw = clamp(CAMERA.yaw + CAMERA.autoYaw, -CAMERA.yawMax, CAMERA.yawMax);
+  const pitch = clamp(CAMERA.pitch + CAMERA.autoPitch, pitchFloor(tg[1], D), CAMERA.pitchMax);
+  const c = FIT.build(D, FIT.sx, FIT.sy, tg, camDir(yaw, pitch));
+  GLR.cam = { eye: c.eye, target: tg, view: c.viewM, proj: c.proj, vp: c.vp, inv: M4.invert(c.vp), D, fovY: FIT.fovY, yaw, pitch };
   VIEWCAM.version++;
   GLR.dirty = true;
 }
-// Project a world point (board x, board y down, z) to CSS pixels: [x, y, w] (a reused array: read it at once)
+// Project a world point (board x, board y down, z) to CSS pixels: [x, y, w] (a reused array: read it at once).
+// A point behind the camera (w <= 0: possible at a steep angle) lands far off screen, so nothing streaks across it.
 const PROJ = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+const OFFSCREEN = -1e6;
 let projI = 0;
 function project(x, y, z) {
   const m = GLR.cam.vp, Y = -y;
   const cx = m[0] * x + m[4] * Y + m[8] * z + m[12], cy = m[1] * x + m[5] * Y + m[9] * z + m[13], cw = m[3] * x + m[7] * Y + m[11] * z + m[15];
   const o = PROJ[projI = (projI + 1) & 3];
+  if (cw < 1e-3) { o[0] = o[1] = OFFSCREEN; o[2] = cw; return o; }
   o[0] = (cx / cw * 0.5 + 0.5) * view.w; o[1] = (0.5 - cy / cw * 0.5) * view.h; o[2] = cw;
   return o;
 }
-// CSS pixel -> board point on the plane z (default: the marble plane)
+// CSS pixel -> board point on the plane z (default: the marble plane). A ray that misses the plane (looking along or
+// away from the wall at a steep angle) gives a point far away in its direction (clamped to +-1e6).
 function unproject(px, py, z = ZM) {
   const nx = (px / view.w) * 2 - 1, ny = 1 - (py / view.h) * 2;
   const a = M4.xform(GLR.cam.inv, [nx, ny, -1]), b = M4.xform(GLR.cam.inv, [nx, ny, 1]);
   const p0 = [a[0] / a[3], a[1] / a[3], a[2] / a[3]], p1 = [b[0] / b[3], b[1] / b[3], b[2] / b[3]];
-  const t = (z - p0[2]) / (p1[2] - p0[2]);
-  return [p0[0] + (p1[0] - p0[0]) * t, -(p0[1] + (p1[1] - p0[1]) * t)];
+  const dz = p1[2] - p0[2];
+  let t = Math.abs(dz) < 1e-9 ? 1e6 : (z - p0[2]) / dz;
+  if (t < 0) t = 1e6;
+  return [clamp(p0[0] + (p1[0] - p0[0]) * t, -1e6, 1e6), clamp(-(p0[1] + (p1[1] - p0[1]) * t), -1e6, 1e6)];
 }
-// CSS px per board unit near a board point (for sizing overlay marks)
-function pxPerUnit(x = BOARD_W / 2, y = BOARD_H / 2) {
-  const a = project(x, y, ZM), ax = a[0], ay = a[1], b = project(x + 100, y, ZM);
-  return Math.hypot(b[0] - ax, b[1] - ay) / 100;
-}
+// CSS px per board unit at the target, front-on (for sizing overlay marks, the home zoom and the snap tolerances):
+// a pure function of the camera's distance, so it does not change as the view is orbited
+function pxPerUnit() { return GLR.cam.D ? view.h / (2 * GLR.cam.D * Math.tan(GLR.cam.fovY / 2)) : 1; }
 
-/* ---- Shadow cascades: 0 = tight on the pegboard, 1 = the whole room in view ---- */
-function lightFrustum(center, pts) {
-  const eye = V3.add(center, V3.scale(SUN_DIR, 2500));
-  const vm = M4.lookAt(eye, center, [0, 1, 0]);
+/* ---- Shadow cascades, fitted to the view: 0 = the pegboard in view, 1 = the room in view ----
+ *  Both cover what is on screen plus a margin (0.3 of the view's height each way), so a 10000-unit tower's shadows are
+ *  as sharp as a small board's. The maps are drawn again only when the view leaves that region or zooms in a lot
+ *  (updateShadowRegion bumps GLR.shadowEpoch). One fixed light view is used, each cascade's size is rounded up and
+ *  its placement snapped to whole shadow texels, so a redraw puts every still shadow on the same texels as before:
+ *  nothing shimmers or pops as the camera follows a marble. Pieces outside the region are not drawn at all
+ *  (frameDraws), so a tall tower costs about what one screenful of it does. */
+const SHADOW = { view: null, cull: null };
+let LIGHT_VIEW = null;
+function lightFrustum(pts, quantum) {
+  if (!LIGHT_VIEW) LIGHT_VIEW = M4.lookAt(V3.scale(SUN_DIR, 2500), [0, 0, 0], [0, 1, 0]);
+  const vm = LIGHT_VIEW;
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
   for (const p of pts) {
     const q = M4.xform(vm, p);
     x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]); z0 = Math.min(z0, q[2]); z1 = Math.max(z1, q[2]);
   }
-  const ext = Math.max(x1 - x0, y1 - y0), mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  const ext = Math.ceil(Math.max(x1 - x0, y1 - y0, 64) / quantum) * quantum, texel = ext / GLR.shadowSize;
+  const mx = Math.round((x0 + x1) / 2 / texel) * texel, my = Math.round((y0 + y1) / 2 / texel) * texel;
   const near = -z1 - 2400, far = -z0 + 60;
   const proj = M4.ortho(mx - ext / 2, mx + ext / 2, my - ext / 2, my + ext / 2, near, far);
   return { vp: M4.mul(proj, vm), ext, range: far - near };
 }
 function boxPts(x0, x1, y0, y1, z0, z1) { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; }
-function setupShadowFrusta() {
-  GLR.sf0 = lightFrustum([BOARD_W / 2, -BOARD_H / 2, 0], boxPts(-60, BOARD_W + 60, 60, -TROUGH.y1 - 20, -8, 80));
-  GLR.sf1 = lightFrustum([BOARD_W / 2, -BOARD_H / 2, 0], boxPts(-1400, BOARD_W + 1400, 900, -DESK_Y - 10, WALL_Z, 160));
+// The board-plane area the whole canvas shows (board units, y down): the canvas's corners and edge midpoints cast
+// onto the board face. From a steep angle the far rays land a long way off (or miss), so each point is kept within
+// three front-on spans of the target: the region stays a few screens across at most.
+function visibleBoardRect() {
+  const ppu = pxPerUnit(), c = GLR.cam.target, cx = c[0], cy = -c[1], sw = view.w / ppu, sh = view.h / ppu;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const [px, py] of [[0, 0], [view.w, 0], [0, view.h], [view.w, view.h], [view.w / 2, 0], [view.w / 2, view.h], [0, view.h / 2], [view.w, view.h / 2]]) {
+    const b = unproject(px, py, 0), x = clamp(b[0], cx - 3 * sw, cx + 3 * sw), y = clamp(b[1], cy - 3 * sh, cy + 3 * sh);
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  return { x0, x1, y0, y1, cx, cy, sw, sh };
+}
+// Fit the cascades to the view when it has left the region they cover (or zoomed well in); true when they moved.
+// From an oblique angle the visible region grows; cascade 0 (the sharp one) keeps to 1.6 spans round the target and
+// the wider cascade 1 covers the rest, so a tilted view stays sharp where the eye is and cheap.
+function updateShadowRegion() {
+  if (!GLR.cam.inv || !view.w) return false;
+  const v = visibleBoardRect(), size = Math.max(v.x1 - v.x0, v.y1 - v.y0), R = SHADOW.view;
+  if (R && v.x0 >= R.x0 && v.x1 <= R.x1 && v.y0 >= R.y0 && v.y1 <= R.y1 && size > 0.6 * R.size) return false;
+  const m = Math.min(v.y1 - v.y0, v.sh) * 0.3 + 60, r = { x0: v.x0 - m, x1: v.x1 + m, y0: v.y0 - m, y1: v.y1 + m, size };
+  SHADOW.view = r;
+  SHADOW.cull = { x0: r.x0 - 120, x1: r.x1 + 120, y0: r.y0 - 120, y1: r.y1 + 120 };
+  // cascade 0: the pegboard, its frame and the trough, where they are in the region (quantised sizes: see above)
+  const kx = 1.6 * v.sw, ky = 1.6 * v.sh;
+  const b0x0 = clamp(Math.max(r.x0, v.cx - kx), -60, BOARD_W + 60), b0x1 = clamp(Math.min(r.x1, v.cx + kx), -60, BOARD_W + 60);
+  const b0y0 = clamp(Math.max(r.y0, v.cy - ky), -60, TROUGH.y1 + 20), b0y1 = clamp(Math.min(r.y1, v.cy + ky), -60, TROUGH.y1 + 20);
+  GLR.sf0 = lightFrustum(boxPts(b0x0, Math.max(b0x1, b0x0 + 1), -b0y0, -Math.max(b0y1, b0y0 + 1), -8, 80), 64);
+  // cascade 1: the wall and the desk's back edge round it
+  GLR.sf1 = lightFrustum(boxPts(r.x0 - 200, r.x1 + 200, -(r.y0 - 200), -Math.min(r.y1 + 200, DESK_Y + 10), WALL_Z, 160), 256);
   GLR.shadowMats = [GLR.sf0.vp, GLR.sf1.vp];
+  GLR.shadowEpoch = (GLR.shadowEpoch || 0) + 1;
+  return true;
 }
 
 /* ---- The window the sun comes through: a lit patch over the board with soft edges on the wall ---- */
-const WINDOW = { u0: -1250, u1: 1350, v0: -2200, v1: 1200, mullionU: -330, transomV: 1e5, halfBar: 14, tan: 0.012 };
+const WINDOW = { u0: -1250, u1: 1350, v0: -2200, v1: 1200, mullionU: -330, transomV: 1e5, halfBar: 14, tan: 0.012, fold: 1170 };
 function setupWindowLight() {
-  const L = SUN_DIR, U = V3.norm(V3.cross([0, 1, 0], L)), V = V3.cross(L, U), cx = BOARD_W / 2;
+  const L = SUN_DIR, U = V3.norm(V3.cross([0, 1, 0], L)), V = V3.cross(L, U), cx = BOARD_W / 2, tall = tallBoard();
+  const k = BOARD_W / 1600;                                // (the patch is as wide as the board)
   GLR.win = {
     U: new Float32Array([U[0], U[1], U[2], -U[0] * cx]), V: new Float32Array([V[0], V[1], V[2], -V[0] * cx]),
-    rect: new Float32Array([WINDOW.u0, WINDOW.v0, WINDOW.u1, WINDOW.v1]),
-    bars: new Float32Array([WINDOW.mullionU, WINDOW.transomV, WINDOW.halfBar, WINDOW.tan]),
+    rect: new Float32Array([WINDOW.u0 * Math.max(k, 0.8), tall ? -1e6 : WINDOW.v0, WINDOW.u1 * Math.max(k, 0.8), WINDOW.v1]),
+    bars: new Float32Array([WINDOW.mullionU * Math.max(k, 0.8), WINDOW.transomV, WINDOW.halfBar, WINDOW.tan]),
+    fold: new Float32Array([tall ? WINDOW.fold : 0, 0, 0, 0]),
   };
 }
 
@@ -553,21 +649,45 @@ function drawItem(set, x, y, c, s, lift, scale, glow, glowCol, sx) {
   DRAWS.push(d);
   return d;
 }
+// A piece's reach round its centre (board units): what culling tests against the region in view
+function pieceReach(p) {
+  switch (p.type) {
+    case 'bar': case 'rail': case 'spring': case 'wall': return p.len / 2 + 30;
+    case 'curve': return p.r + 20;
+    case 'bell': return p.r + 20;
+    case 'funnel': return Math.hypot(p.w / 2, p.h / 2 + 20) + 20;
+    case 'dropper': return 120;
+    default: return 60;
+  }
+}
+// Pieces outside the shadow region (the view plus a margin: SHADOW.cull) are left out of the frame. Their meshes are
+// still built ahead, two a frame, nearest first in board order, so scrolling along a tower never waits for them.
 function frameDraws(t) {
   DRAWS.length = 0;
   PM.shapes.clear();
   const live = HISTORY.pending ? HISTORY.liveId || EDIT.selected : null;
   if (!live) PM.live = null;
-  const n = MODEL.pieces.length + (EDIT.ghost ? 1 : 0);
+  const n = MODEL.pieces.length + (EDIT.ghost ? 1 : 0), C = SHADOW.cull;
+  let ahead = 2, drawn = 0;
   for (let i = 0; i < n; i++) {
     const p = i < MODEL.pieces.length ? MODEL.pieces[i] : EDIT.ghost;
     const f = SIM.fx.get(p.id), ghost = p === EDIT.ghost, lifted = ghost || EDIT.lifted === p.id;
+    if (C && !lifted && p.id !== live) {
+      const r = pieceReach(p);
+      if (p.x + r < C.x0 || p.x - r > C.x1 || p.y + r < C.y0 || p.y - r > C.y1) {
+        const key = pieceShapeKey(p);
+        PM.shapes.add(key);
+        if (ahead > 0 && !PM.cache.has(key)) { pieceMeshSet(p, key); ahead--; }
+        continue;
+      }
+    }
     const wig = f && !reducedMotion ? Math.sin(t * 62 + p.x * 0.1) * 0.028 * f.wiggle : 0;
     const a = -(p.type === 'dropper' ? 0 : p.rot || 0) * RAD + wig;
     const sc = p.type === 'bell' && f && !reducedMotion ? 1 + 0.07 * f.wiggle * Math.sin(t * 48) : 1;
     const glowCol = hasNote(p.type) ? glowColor(p.note) : GLOW_PLAIN;
     let set, sx = 0;
     if (p.id === live) { const L = liveMeshSet(p); set = L.set; sx = L.sx; } else { const key = pieceShapeKey(p); set = pieceMeshSet(p, key); PM.shapes.add(key); }
+    drawn++;
     const d = drawItem(set, p.x, -p.y, Math.cos(a), Math.sin(a), lifted ? 7 : 0, sc,
       Math.max(f ? f.glow * 0.9 : 0, ghost ? 0.25 : 0, EDIT.selected === p.id && EDIT.pulse > 0 ? EDIT.pulse * 0.5 : 0), glowCol, sx);
     if (p.type === 'dropper') {                      // its gate flicks open as a marble leaves
@@ -576,6 +696,7 @@ function frameDraws(t) {
       drawItem(PM.gate, p.x - 13, -(p.y - 11), Math.cos(ga), Math.sin(ga), d.lift, 1, 0, glowCol, 0);
     }
   }
+  GLR.drawnPieces = drawn;
 }
 
 // Instancing: the draw list grouped by mesh (pieces of one shape, size and note share it), each group's
@@ -641,6 +762,7 @@ function setCommon(p) {
   if (u.uInst) { gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, INST.tex); gl.uniform1i(u.uInst, 8); }
   if (u.uBoardCol) gl.uniform3fv(u.uBoardCol, BOARD_REFL);
   if (u.uWinU) { gl.uniform4fv(u.uWinU, w.U); gl.uniform4fv(u.uWinV, w.V); gl.uniform4fv(u.uWinRect, w.rect); gl.uniform4fv(u.uWinBars, w.bars); }
+  if (u.uWinFold) gl.uniform4fv(u.uWinFold, w.fold);
   if (u.uEnv) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_CUBE_MAP, GLR.env.tex); gl.uniform1i(u.uEnv, 2); }
   const s0 = GLR.shadowMats;
   if (u.uShadow0) { gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, GLR.shadow[0].tex); gl.uniform1i(u.uShadow0, 3); }
@@ -705,6 +827,7 @@ function sceneSignature(t) {
 function renderGL(t) {
   if (!GLR.ok || !GLR.ready || !GLR.targets) { drawOverlay(t); return false; }
   const gl = GLR.gl, P = GLR.progs;
+  if (GLR.sceneBoard !== BOARD_W + 'x' + BOARD_H) rebuildScene();          // (the board's size changed)
   frameMarbles();
   const sig = sceneSignature(t);
   if (sig === GLR.lastSig) { drawOverlay(t); return false; }
@@ -717,6 +840,7 @@ function renderGL(t) {
   GLR.dirty = false;
   GLR.frames++;
   const tStart = performance.now();
+  updateShadowRegion();
   frameDraws(t);
   frameInstances();
   // 1) shadow maps: only when a piece moved, changed, wiggles or floats

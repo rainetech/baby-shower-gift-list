@@ -1,7 +1,7 @@
 
 /* ============================================================================
  *  MODEL: the layout being built
- *  Layout = { v: 1, name, tempo (bpm), board: { w: 1600, h: 1000 }, pieces: Piece[], timing? }
+ *  Layout = { v: 1, name, tempo (bpm), board: { w, h }, pieces: Piece[], timing? }
  *  Piece  = { id, type, x, y, rot, len?, r?, sweep?, w?, h?, note?, schedule? }
  *  Timing = { start, beatsPerBar, pulse?, tempoMap? }: a song's beat grid (see normTiming)
  *  Board units, y down, (x, y) = the piece centre, rot in degrees clockwise.
@@ -9,8 +9,37 @@
  *  that only steers). A new piece without a note gets the next note of the scale.
  *  Every change goes through change() (or beginChange/endChange for drags), which
  *  keeps the undo history, bumps MODEL.version and tells the listeners.
+ *  The board's size is the layout's own (`board`): a Wide board, a Tower several
+ *  screens tall, or whatever size a loaded layout brings.
  * ========================================================================== */
-const BOARD_W = 1600, BOARD_H = 1000, GRID = 20;
+const GRID = 20;
+/* ---- The board: its size comes with the layout ----
+ *  BOARD_W / BOARD_H hold the size of the board on the wall (set by applyLayout and resizeBoard only). A layout that
+ *  names no board is an older run: the original Wide board. New runs (the starter, Clear) are Towers. */
+const BOARD_SIZES = [
+  { id: 'wide', name: 'Wide', w: 1600, h: 1000 },
+  { id: 'tower', name: 'Tower', w: 1000, h: 3000 },
+  { id: 'tall', name: 'Tall tower', w: 1000, h: 6000 },
+];
+const BOARD_LEGACY = { w: 1600, h: 1000 }, BOARD_NEW = { w: 1000, h: 3000 };
+const BOARD_LIMITS = { w: [400, 4000], h: [400, 16000] };
+let BOARD_W = BOARD_NEW.w, BOARD_H = BOARD_NEW.h;
+const BOARD_HOOKS = [];              // run at once whenever the board's size changes (the room's geometry follows it)
+function onBoardSize(f) { BOARD_HOOKS.push(f); }
+function setBoardSize(w, h) {
+  if (w === BOARD_W && h === BOARD_H) return;
+  BOARD_W = w; BOARD_H = h;
+  for (const f of BOARD_HOOKS) f();
+}
+// A board size from a layout (clamped to the limits; exact values are kept: they may come from a solved song)
+function normBoard(b) {
+  const w = b && typeof b === 'object' ? num(b.w, NaN) : NaN, h = b && typeof b === 'object' ? num(b.h, NaN) : NaN;
+  if (!(w > 0) || !(h > 0)) return { w: BOARD_LEGACY.w, h: BOARD_LEGACY.h };
+  return { w: clamp(w, BOARD_LIMITS.w[0], BOARD_LIMITS.w[1]), h: clamp(h, BOARD_LIMITS.h[0], BOARD_LIMITS.h[1]) };
+}
+// A board taller than it is wide (by a third or more) is shown as a tower: the camera scrolls along it
+const tallBoard = () => BOARD_H > BOARD_W * 1.3;
+const boardSizeOf = (w = BOARD_W, h = BOARD_H) => BOARD_SIZES.find((s) => s.w === w && s.h === h) || null;
 const PIECE_TYPES = ['bar', 'rail', 'curve', 'bell', 'spring', 'wall', 'funnel', 'dropper', 'bucket'];
 const PARAM_KEYS = { bar: ['len'], rail: ['len'], curve: ['r', 'sweep'], bell: ['r'], spring: ['len'], wall: ['len'],
   funnel: ['w', 'h'], dropper: [], bucket: ['w'] };
@@ -31,7 +60,8 @@ function validNote(n) { const m = typeof n === 'string' ? noteToMidi(n) : null; 
 
 // Input limits: anything read from a file, a link or the API is bounded before CANON sees it (CANON's broadphase
 // loops over a piece's grid cells, so a piece at x = 1e18 would never finish), and every legitimate value is kept
-// bit-identical (a demo solved with exact floats must replay exactly).
+// bit-identical (a demo solved with exact floats must replay exactly). Pieces are checked against the layout's own
+// board (up to BOARD_LIMITS), so a tower's pieces thousands of units down are kept.
 const LIMITS = { pad: 1000, idLen: 40, times: 2000, maxT: 600, tempoMap: 512, pieces: 1500 };
 const NORM = { off: 0, trimmed: 0, capped: 0 };        // what the last normalisation dropped (see applyLayout)
 function normSchedule(s) {
@@ -169,6 +199,8 @@ function simLayout(pieces = MODEL.pieces) { return { v: 1, tempo: MODEL.tempo, b
 function applyLayout(layout) {
   const L = layout && typeof layout === 'object' ? layout : {};
   NORM.off = NORM.trimmed = NORM.capped = 0;
+  const B = normBoard(L.board);                          // (first: pieces are checked against this board)
+  setBoardSize(B.w, B.h);
   MODEL.name = typeof L.name === 'string' && L.name ? L.name.slice(0, 60) : 'My marble run';
   MODEL.tempo = clamp(Math.round(num(L.tempo, 100) * 100) / 100, 30, 300);
   MODEL.timing = normTiming(L.timing);
@@ -205,7 +237,7 @@ function loadReportText(r = MODEL.loadReport) {
 
 /* ---- Undo / redo: whole-layout snapshots (layouts are small) ---- */
 const HISTORY = { undo: [], redo: [], max: 200, pending: null, liveId: null };
-function snapshot() { return JSON.stringify({ name: MODEL.name, tempo: MODEL.tempo, timing: MODEL.timing, pieces: MODEL.pieces, demoId: MODEL.demoId, remixOf: MODEL.remixOf }); }
+function snapshot() { return JSON.stringify({ name: MODEL.name, tempo: MODEL.tempo, timing: MODEL.timing, board: { w: BOARD_W, h: BOARD_H }, pieces: MODEL.pieces, demoId: MODEL.demoId, remixOf: MODEL.remixOf }); }
 function restore(s) {
   const o = JSON.parse(s);
   const keepNext = MODEL.nextId;
@@ -285,7 +317,43 @@ function removePiece(id) {
     return true;
   });
 }
+// Clear keeps the board's size (the Board section of Save & share picks another)
 function clearBoard() { return change(() => { MODEL.pieces = []; MODEL.demoId = null; MODEL.remixOf = null; MODEL.name = 'My marble run'; MODEL.lastNote = null; MODEL.timing = null; }); }
+// The board area the pieces take (metal, dropper tubes, pails), or null for an empty board
+function piecesBox(pieces = MODEL.pieces) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const add = (x, y, r) => { x0 = Math.min(x0, x - r); x1 = Math.max(x1, x + r); y0 = Math.min(y0, y - r); y1 = Math.max(y1, y + r); };
+  for (const p of pieces) {
+    if (p.type === 'dropper') { add(p.x, p.y - 100, 22); add(p.x, p.y, 16); continue; }
+    for (const c of CANON.colliders(p)) {
+      if (c.shape === 'circle') add(c.x, c.y, c.r);
+      else { add(c.ax, c.ay, c.hw); add(c.bx, c.by, c.hw); }
+    }
+  }
+  return x1 >= x0 ? { x0, x1, y0, y1 } : null;
+}
+// A new board size (one undo step). No piece is ever lost: the run keeps its place relative to the board's middle
+// (moved sideways in whole holes), is slid in if it would stick out at a side, and a board too small for it grows to
+// hold it (in 100-unit steps). Pieces never move up or down: the droppers stay at the top.
+// Returns { w, h, dx, grew } (grew: the board is bigger than asked, to keep every piece).
+function resizeBoard(w, h) {
+  const want = normBoard({ w, h });
+  return change(() => {
+    let W = want.w, H = want.h, dx = 0;
+    const box = piecesBox(), M = 20;
+    if (box) {
+      dx = Math.round((W - BOARD_W) / 2 / GRID) * GRID;          // keep the run centred on the board
+      if (box.x1 - box.x0 + 2 * M > W) W = Math.ceil((box.x1 - box.x0 + 2 * M) / 100) * 100;
+      if (box.x0 + dx < M) dx += Math.ceil((M - box.x0 - dx) / GRID) * GRID;
+      if (box.x1 + dx > W - M) dx -= Math.ceil((box.x1 + dx - W + M) / GRID) * GRID;
+      if (box.y1 + 2 * M > H) H = Math.ceil((box.y1 + 2 * M) / 100) * 100;
+      W = Math.min(W, BOARD_LIMITS.w[1]); H = Math.min(H, BOARD_LIMITS.h[1]);
+      if (dx) for (const p of MODEL.pieces) p.x += dx;
+    }
+    setBoardSize(W, H);
+    return { w: W, h: H, dx, grew: W !== want.w || H !== want.h };
+  }, 'board');
+}
 // A new tempo replaces a song's tempo map (the beat grid keeps its start and meter)
 function setTempo(bpm) {
   return change(() => {
@@ -296,7 +364,7 @@ function setTempo(bpm) {
 function loadLayoutUndoable(layout, demoId = null) { return change(() => { applyLayout(layout); MODEL.demoId = demoId; MODEL.remixOf = (layout && layout.remixOf) || null; }, 'load'); }
 
 /* ---- Share links: the layout packed into the URL hash (works over file://) ----
- *  '#m=' + base64url(JSON [v, name, tempo, rows, timing?]); row = [id, typeIndex, x, y, rot, ...params, note, gain?,
+ *  '#m=' + base64url(JSON [v, name, tempo, rows, timing|0, [boardW, boardH]]) (a link without the board is a Wide one); row = [id, typeIndex, x, y, rot, ...params, note, gain?,
  *  schedule] (note 0 = silent; gain only when it is not 1). Numbers keep full precision, so a shared demo replays
  *  identically. Links over 1 MB are ignored; rows that are not rows are skipped. */
 const HASH_MAX = 2 << 20;                        // (2 MB, as for an imported file)
@@ -323,7 +391,8 @@ function packLayout(L) {
     }
     return r;
   });
-  return b64urlEncode(JSON.stringify(L.timing ? [1, L.name, L.tempo, rows, L.timing] : [1, L.name, L.tempo, rows]));
+  const B = L.board || BOARD_LEGACY;
+  return b64urlEncode(JSON.stringify([1, L.name, L.tempo, rows, L.timing || 0, [B.w, B.h]]));
 }
 function unpackLayout(str) {
   const a = JSON.parse(b64urlDecode(str));
@@ -343,7 +412,7 @@ function unpackLayout(str) {
     }
     pieces.push(p);
   }
-  const L = { v: 1, name: a[1], tempo: a[2], board: { w: BOARD_W, h: BOARD_H }, pieces };
+  const L = { v: 1, name: a[1], tempo: a[2], board: Array.isArray(a[5]) ? { w: a[5][0], h: a[5][1] } : { w: BOARD_LEGACY.w, h: BOARD_LEGACY.h }, pieces };
   if (a[4] && typeof a[4] === 'object') L.timing = a[4];
   return L;
 }
@@ -390,7 +459,7 @@ function readAutosave() {
 }
 // Recent runs: [{ name, t, layout }], newest first
 function listRecent() { const r = store.json(RECENT_KEY, []); return Array.isArray(r) ? r.filter((x) => x && x.layout && Array.isArray(x.layout.pieces)) : []; }
-const runSig = (L) => JSON.stringify([L.tempo, L.timing || null, L.pieces]);
+const runSig = (L) => JSON.stringify([L.tempo, L.timing || null, L.pieces, L.board ? [L.board.w, L.board.h] : null]);
 // Keep the run on the board in Recent before something replaces it (a user run only: not a demo, not empty, not the
 // untouched starter run, not the same as the newest entry). Returns true when it was kept.
 function stashUserRun() {
@@ -398,7 +467,7 @@ function stashUserRun() {
   const L = getLayout(), sig = runSig(L);
   if (typeof starterLayout === 'function') {                // the untouched starter run is not worth keeping
     const S = starterLayout();
-    if (runSig({ tempo: S.tempo, timing: normTiming(S.timing), pieces: S.pieces.map(normPiece) }) === sig) return false;
+    if (runSig({ tempo: S.tempo, timing: normTiming(S.timing), pieces: S.pieces.map(normPiece), board: normBoard(S.board) }) === sig) return false;
   }
   const list = listRecent();
   if (list.length && runSig(list[0].layout) === sig) return false;

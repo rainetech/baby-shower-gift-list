@@ -158,10 +158,12 @@ function watchContext(canvas) {
 buildTray();
 attachTray();
 attachInput();
-let laidDemo = stripDemo();
+let laidDemo = stripDemo(), laidBoard = BOARD_W + 'x' + BOARD_H;
 let voicesTimer = 0;
 onModelChange((kind) => {
-  if (kind === 'edit' && MODEL.demoId) adoptDemo(true);           // your first edit of a demo: it is your run now
+  if ((kind === 'edit' || kind === 'board') && MODEL.demoId) adoptDemo(true);   // your first edit of a demo: it is your run now
+  const bk = BOARD_W + 'x' + BOARD_H;
+  if (bk !== laidBoard) { laidBoard = bk; laidDemo = stripDemo(); relayout(); homeView(); towerHint(); }   // another board: view it afresh
   if (kind !== 'live') {
     autosaveSoon();
     clearTimeout(voicesTimer); voicesTimer = setTimeout(() => piano.prepare(layoutVoices()), 500);   // the synth readies this run's notes
@@ -183,7 +185,7 @@ function disarmAudioUnlock() { if (!unlockArmed) return; unlockArmed = false; fo
 armAudioUnlock();
 piano.onStateChange = (s) => { if (s === 'running') disarmAudioUnlock(); else if (s !== 'closed') armAudioUnlock(); };
 
-function relayout() { RENDER.layout(); OVL.sig = ''; }
+function relayout() { remeasureUI(); RENDER.layout(); OVL.sig = ''; placeMinimap(); }
 let resizeQueued = false;
 window.addEventListener('resize', () => { perfQuiet(); if (resizeQueued) return; resizeQueued = true; requestAnimationFrame(() => { resizeQueued = false; relayout(); refreshTray(true); }); });
 document.addEventListener('visibilitychange', () => { perfQuiet(); lastFrame = performance.now(); if (!document.hidden) armAudioUnlock(); });
@@ -252,6 +254,7 @@ window.addEventListener('unhandledrejection', (e) => logOnce('promise', e.reason
 let lastFrame = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
+  UI.frameNo++;
   if (!BOOT.drawn) BOOT.frames++;
   const ms = Math.max(0, now - lastFrame);
   const dt = Math.min(ms / 1000, 0.25);                  // effects age in real time (the sim follows the audio clock)
@@ -264,7 +267,7 @@ function frame(now) {
     if (++FAIL.sim === 3) { try { stop(); } catch (e2) { /* already stopped */ } toast('Something went wrong', 'Undo last change', () => undo(), 8000); }
   }
   EDIT.pulse = Math.max(0, EDIT.pulse - dt * 2.5);
-  try { stepViewAnim(dt); } catch (e) { ok = false; VIEWCAM.anim = null; logOnce('view', e); }
+  try { stepViewAnim(dt, Math.min(ms / 1000, 1)); } catch (e) { ok = false; VIEWCAM.anim = null; logOnce('view', e); }
   try { refreshStrip(); if (SIM.playing) refreshTempo(); } catch (e) { ok = false; logOnce('strip', e); }
   let drew = false;
   if (FAIL.drew && glOk) GLR.lastRenderMs = ms;             // (a drawn frame's real cost: until the next frame could start)
@@ -273,9 +276,11 @@ function frame(now) {
     if (++FAIL.render >= 3) { FAIL.render = 0; if (glOk) fallbackTo2D(); }
   }
   try { if (drew) adaptResolution(ms); } catch (e) { logOnce('quality', e); }
+  try { drawMinimap(); drawViewCube(); } catch (e) { ok = false; logOnce('minimap', e); }
   FAIL.drew = drew;
-  // a huge run on a computer that draws 3D in software would take seconds per frame: the 2D view instead
-  if (glOk && GLR.software && GLR.ready && MODEL.pieces.length > 400) { fallbackTo2D(); toastMore('This run is too big to draw in 3D on this computer: here is the 2D view.'); }
+  // a huge run on a computer that draws 3D in software would take seconds per frame: the 2D view instead (on a tower
+  // only the pieces in view are drawn: those count)
+  if (glOk && GLR.software && GLR.ready && (GLR.drawnPieces || 0) > 400) { fallbackTo2D(); toastMore('This run is too big to draw in 3D on this computer: here is the 2D view.'); }
   SAVE.frameOk = ok;
   if (ok && !BOOT.drawn) bootDrawn();
 }
@@ -287,6 +292,7 @@ requestAnimationFrame(frame);
 if (glOk) requestAnimationFrame(() => setTimeout(() => { if (glOk && !GLR.ready) startAssetBuild(); }, 30));
 else scheduleDemoPrebuild();
 if (store.get('marbleMusic.helpSeen') !== '1') openHelp();
+else towerHint();
 // Demos are solved and verified in the background once the page is up, one per idle slot
 function scheduleDemoPrebuild() {
   const ids = MarbleDemos.list().map((d) => d.id);
@@ -320,7 +326,7 @@ window.marbleMusic = {
   addPiece(spec) { return addPiece(spec); },
   updatePiece(id, patch) { return updatePiece(id, patch); },
   removePiece(id) { const r = removePiece(id); if (EDIT.selected === id) select(null); return r; },
-  clear() { stop(); clearBoard(); select(null); fitView(); return true; },
+  clear() { stop(); clearBoard(); select(null); homeView(); return true; },
   undo() { return undo(); },
   redo() { return redo(); },
   getLayout() { return getLayout(); },
@@ -336,6 +342,8 @@ window.marbleMusic = {
   get demos() { return MarbleDemos.list().map((d) => ({ id: d.id, title: d.title })); },
   loadDemo(id) { return loadDemo(id, false); },
   demoTargets(id) { const b = MarbleDemos.build(id); return b ? b.targets.map((x) => ({ t: x.t, note: x.note, voice: x.voice })) : []; },
+  demoStatus(id) { return MarbleDemos.status(id); },
+  demoReady(id) { return MarbleDemos.ready(id).then((b) => !!b); },
   predict(dropperId, seconds = 6) { const r = CANON.predict(simLayout(), dropperId, seconds, 1 / 60); return { path: r.path, hits: r.hits, end: r.end }; },
   get renderer() { return rendererName; },
   boardToScreen(x, y) { const s = VIEW.b2s(x, y); return { x: s[0], y: s[1] }; },
@@ -347,6 +355,21 @@ window.marbleMusic = {
   setTempo(bpm) { return setTempo(bpm); },
   get playing() { return SIM.playing; },
   MarbleDemos,
-  get gpu() { return glOk ? { frameMs: Math.round(GLR.lastFrameMs || 0), software: GLR.software, scale: GLR.scale, samples: GLR.samples, taps: GLR.taps, timings: GLR.timings, frames: GLR.frames } : null; },
+  get gpu() { return glOk ? { frameMs: Math.round(GLR.lastFrameMs || 0), software: GLR.software, scale: GLR.scale, samples: GLR.samples, taps: GLR.taps, timings: GLR.timings, frames: GLR.frames, drawnPieces: GLR.drawnPieces, shadowEpoch: GLR.shadowEpoch, shadowExt: GLR.sf0 && [Math.round(GLR.sf0.ext), Math.round(GLR.sf1.ext)] } : null; },
+  // the board and the camera (towers): the board's size, changing it (undoable, keeps every piece), and the view
+  get board() { return { w: BOARD_W, h: BOARD_H, tall: tallBoard(), size: (boardSizeOf() || { id: 'custom' }).id }; },
+  setBoard(w, h) { stop(); const r = resizeBoard(w, h); return r; },
+  get view() { const c = viewCentre(), sp = viewSpan(); return { x: c[0], y: c[1], w: sp[0], h: sp[1], zoom: VIEWCAM.zoom, ppu: VIEW.ppu(), following: TFOLLOW.active && !TFOLLOW.paused, followPaused: TFOLLOW.active && TFOLLOW.paused, mode: VIEWMODE.mode }; },
+  scrollTo(y) { pauseFollow(); setViewMode('free'); VIEWCAM.glide = null; setViewCentre(viewCentre()[0], y); },
+  resumeFollow() { resumeFollow(); },
+  homeView() { homeView(); },
+  // the free camera: { yaw, pitch } in degrees (yaw: the eye to the right; pitch: the eye up), dist (units from the
+  // target), target [x, y] (the board point in the middle of the free area), following; setCamera sets any of them
+  // at once (angles clamped to the limits; a target pauses the follow camera); resetView: the front view as the board
+  // opened (a run being followed stays followed)
+  get camera() { return cameraState(); },
+  setCamera(o) { return setCameraState(o); },
+  resetView() { resetView(); return cameraState(); },
+  get cameraLimits() { return { yaw: [-CAMERA.yawMax / RAD, CAMERA.yawMax / RAD], pitch: [CAMERA.pitchMin / RAD, CAMERA.pitchMax / RAD], zoom: [ZOOM_MIN, zoomMax()] }; },
   debugCloseUp: DEV ? (...a) => debugCloseUp(...a) : undefined,
 };

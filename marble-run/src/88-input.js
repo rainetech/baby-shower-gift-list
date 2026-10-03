@@ -5,9 +5,15 @@
  *    placement), or tap it and then tap the board. A new piece plays its note (the next note of the scale).
  *  - Board: press a piece to select it and drag to move it; drag the yellow knob to turn it (15° steps,
  *    Shift 5°, Alt free); drag the white handles to resize; drag it back onto the tray to remove it.
- *    Drag empty board (or two fingers) to pan; wheel or pinch to zoom; the wheel over the selected piece turns it.
+ *    Drag empty board (one finger) to ORBIT the view round the point in the middle of the screen (a light spin
+ *    after a quick drag); Shift-, right- or middle-drag (two fingers) to pan (let go while moving and it glides on);
+ *    wheel or pinch to zoom (on a tower the wheel scrolls and Ctrl+wheel zooms; a two-finger twist turns the view);
+ *    double-click a piece to zoom in on it; the wheel over the selected piece turns it. In the 2D view (front-on)
+ *    a drag pans instead.
  *  - Keys: Delete, Ctrl/Cmd+Z / Shift+Z / Y, Ctrl/Cmd+D, R (Shift+R = 5°), Q turns back, arrows nudge
- *    (Alt: 1 unit), Space plays/stops, D drops a marble, F fits, +/- zoom, Esc deselects, H help.
+ *    (Shift: 1 unit), Alt+arrows orbit, 0 the front view of the whole board, Space plays/stops, D drops a marble,
+ *    F fits, +/- zoom, Esc deselects, H help; on a tower Page Up / Page Down, Home / End and (nothing selected) the
+ *    arrow keys scroll.
  * ========================================================================== */
 const EDIT = { selected: null, hover: null, handle: null, drag: null, ghost: null, ghostOnBoard: false, lifted: null, placing: null, tapHint: false, pulse: 0, snap: null, timing: null };
 const snapOn = (e) => !(e && e.altKey);
@@ -93,16 +99,19 @@ function tiltSign(x, y) {
 const SNAP_REACH = 24;
 const SNAPC = { key: '', beats: [], paths: [] };
 function snapBase(excludeId) {
-  const key = (MODEL.epoch || 0) + '|' + (excludeId || '') + '|' + BEAT_CLOCK.key + '|' + MODEL.tempo + '|' + MODEL.pieces.length;
+  const key = (MODEL.epoch || 0) + '|' + (excludeId || '') + '|' + BEAT_CLOCK.key + '|' + MODEL.tempo + '|' + MODEL.pieces.length + '|' + BOARD_W + 'x' + BOARD_H;
   if (SNAPC.key === key) return SNAPC;
   layoutBeatClock();
   const pieces = excludeId ? MODEL.pieces.filter((p) => p.id !== excludeId) : MODEL.pieces;
-  const L = simLayout(pieces), clk = layoutBeatClock(), cols = [];
+  const L = simLayout(pieces), clk = layoutBeatClock(), cols = [], secs = previewSeconds();
   for (const p of pieces) for (const c of CANON.colliders(p)) cols.push(c);
+  // (the paths of the whole run, as the preview has them; without the piece being moved they differ only from where
+  //  its marble first comes near that piece: a tower's long paths are run again only from there)
+  const full = previewPaths(MODEL.pieces, MODEL.version + '||' + MODEL.tempo, previewSeconds(), false), gone = excludeId ? [pieceById(excludeId)] : [];
   const beats = [], paths = [];
   for (const d of pieces) {
     if (d.type !== 'dropper') continue;
-    const pr = CANON.predict(L, d.id, 8, 1 / 60);
+    const pr = excludeId ? predictReusing(L, d.id, secs, full.get(d.id), gone) : full.get(d.id) || predictRun(L, d.id, secs);
     paths.push({ d, pr });
     for (const b of pathBeats(d, pr, cols, clk, key)) if (b.landable) beats.push(Object.assign({ dropperId: d.id }, b));
   }
@@ -152,7 +161,7 @@ function cleanWay(p, b, excludeId, ways, base) {
   for (const [rot, slide] of ways) {
     const c = snapSpot(p, b, rot, slide), q = Object.assign({}, p, { id: '__snap', x: c[0], y: c[1], rot });
     if (touchesPathBefore(q, entry, b.tp - 0.02)) continue;
-    const pr = CANON.predict(simLayout(others.concat([q])), b.dropperId, b.tp + 2.5, 1 / 60), hits = pr.hits.filter((h) => h.pieceId === '__snap');
+    const pr = predictReusing(simLayout(others.concat([q])), b.dropperId, Math.min(b.tp + 2.5, entry.pr.seconds || b.tp + 2.5), entry.pr, [q]), hits = pr.hits.filter((h) => h.pieceId === '__snap');
     if (hits.length === 1 && Math.abs(hits[0].t - b.tp) <= 0.015 && repeats(pr.hits) <= repeats(baseHits)) return { x: c[0], y: c[1], rot, beat: b };
   }
   return null;
@@ -240,6 +249,7 @@ function trayDown(e) {
 function trayMove(e) {
   const d = EDIT.drag;
   if (!d || d.kind !== 'tray' || e.pointerId !== d.id) return;
+  keepPointer(trayMove, e);
   if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6) return;
   d.moved = true;
   cancelPlacing();
@@ -282,6 +292,7 @@ function trayKey(e) {
 
 /* ---- The board ---- */
 const POINTERS = new Map();                           // active touch/pen pointers (pinch)
+const TWIST_DEAD = 8 * RAD;                           // a two-finger twist turns the view once it has passed this
 function boardDown(e) {
   const stage = stageEl();
   piano.init();
@@ -289,13 +300,19 @@ function boardDown(e) {
   POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY });
   try { stage.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   const touch = e.pointerType !== 'mouse';
-  if (POINTERS.size === 2) {                          // second finger: pinch/pan the view instead
+  if (POINTERS.size === 2) {                          // second finger: pinch (zoom), pan and twist (orbit) the view instead
+    stopFling(); stopOrbitMotion();
     if (EDIT.drag && EDIT.drag.kind !== 'pinch') { if (EDIT.drag.kind === 'move' || EDIT.drag.kind === 'handle') { EDIT.lifted = null; endChange(); } }
     const [a, b] = [...POINTERS.values()];
-    EDIT.drag = { kind: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+    EDIT.drag = { kind: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, a0: Math.atan2(b.y - a.y, b.x - a.x), twist: 0, travel: 0, raw: orbitRaw() };
     return;
   }
-  if (e.button !== undefined && e.button > 0 && e.pointerType === 'mouse') { EDIT.drag = { kind: 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY }; return; }
+  if (POINTERS.size > 2) return;
+  if (e.pointerType === 'mouse' && ((e.button !== undefined && e.button > 0) || e.shiftKey)) {   // right, middle or Shift-drag: pan
+    stopFling(); stopOrbitMotion();
+    EDIT.drag = { kind: 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY };
+    return;
+  }
   const bp = VIEW.s2b(e.clientX, e.clientY);
   if (EDIT.placing) {                                 // tap-to-place
     const sp = snapOn(e), type = EDIT.placing;
@@ -314,7 +331,9 @@ function boardDown(e) {
     return;
   }
   select(null);
-  EDIT.drag = { kind: 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY };
+  stopFling(); stopOrbitMotion();
+  // empty board: orbit the 3D view (the 2D view, front-on, pans)
+  EDIT.drag = { kind: glOk ? 'orbit' : 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, touch, raw: orbitRaw(), moved: false };
 }
 function boardMove(e) {
   if (POINTERS.has(e.pointerId)) POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -333,16 +352,42 @@ function boardMove(e) {
     if (POINTERS.size < 2) return;
     const [a, b] = [...POINTERS.values()];
     const dist = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-    panBy(cx - d.cx, cy - d.cy);
+    // two fingers moving together pan (after 10 px, which pauses the follow camera); pinching zooms; twisting turns
+    d.travel += Math.hypot(cx - d.cx, cy - d.cy);
+    panBy(cx - d.cx, cy - d.cy, d.travel > 10);
     if (d.d0 > 10) zoomAt(cx, cy, dist / d.d0);
+    if (glOk) {
+      const ang = Math.atan2(b.y - a.y, b.x - a.x);
+      let da = ang - d.a0; if (da > Math.PI) da -= 2 * Math.PI; else if (da < -Math.PI) da += 2 * Math.PI;
+      d.a0 = ang;
+      const was = d.twist; d.twist += da;
+      const use = Math.max(0, Math.abs(d.twist) - TWIST_DEAD) * Math.sign(d.twist) - Math.max(0, Math.abs(was) - TWIST_DEAD) * Math.sign(was);
+      if (use) orbitBy(use, 0, d.raw);
+    }
     d.d0 = dist; d.cx = cx; d.cy = cy;
     return;
   }
   if (e.pointerId !== d.id) return;
-  if (d.kind === 'pan') { panBy(e.clientX - d.lx, e.clientY - d.ly); d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing'; return; }
+  if (d.kind === 'pan') {                            // (the fling's speed from the events' own times: a busy frame does not slow it)
+    const now = e.timeStamp || performance.now(), dtm = Math.max(1, now - (d.lt || now - 16)), k = Math.min(1, dtm / 50);
+    d.vx = (d.vx || 0) * (1 - k) + ((e.clientX - d.lx) / dtm * 1000) * k; d.vy = (d.vy || 0) * (1 - k) + ((e.clientY - d.ly) / dtm * 1000) * k; d.lt = now;
+    panBy(e.clientX - d.lx, e.clientY - d.ly); d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing';
+    return;
+  }
+  if (d.kind === 'orbit') {                          // drag right: the view swings left round the target (the board turns with the pointer)
+    if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) return;
+    if (!d.moved) { d.moved = true; orbitHint(d.touch); }
+    const g = orbitGain(), dy = -(e.clientX - d.lx) * g, dp = (e.clientY - d.ly) * g;
+    const now = e.timeStamp || performance.now(), dtm = Math.max(1, now - (d.lt || now - 16)), k = Math.min(1, dtm / 50);
+    d.vy = (d.vy || 0) * (1 - k) + (dy / dtm * 1000) * k; d.vp = (d.vp || 0) * (1 - k) + (dp / dtm * 1000) * k; d.lt = now;
+    orbitBy(dy, dp, d.raw);
+    d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing';
+    return;
+  }
   const bp = VIEW.s2b(e.clientX, e.clientY);
   if (d.kind === 'move') {
     if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) return;
+    keepPointer(boardMove, e);
     if (!d.moved) { d.moved = true; beginChange(); EDIT.lifted = d.pid; snapBase(d.pid); }
     const sp = snapOn(e);
     const p = pieceById(d.pid);
@@ -365,6 +410,11 @@ function boardUp(e) {
   if (e.pointerId !== d.id) return;
   EDIT.drag = null;
   stageEl().style.cursor = '';
+  if (d.kind === 'pan' && d.lt && (e.timeStamp || performance.now()) - d.lt < 80 && Math.hypot(d.vx, d.vy) > 250 && !reducedMotion) { FLING.vx = d.vx; FLING.vy = d.vy; return; }
+  if (d.kind === 'orbit') {                          // let go while turning: it spins on a little and settles
+    if (d.moved && d.lt && (e.timeStamp || performance.now()) - d.lt < 80 && Math.hypot(d.vy, d.vp) > 0.6 && !reducedMotion) { ORBIT.vyaw = clamp(d.vy, -4, 4); ORBIT.vpitch = clamp(d.vp, -4, 4); ORBIT.raw = d.raw; }
+    return;
+  }
   if (d.kind === 'move') {
     EDIT.lifted = null; EDIT.snap = null; EDIT.timing = null;
     tray.classList.remove('trash');
@@ -426,6 +476,14 @@ function boardWheel(e) {
       return;
     }
   }
+  // a tower scrolls (Shift: sideways); Ctrl+wheel and a trackpad pinch (which arrives as Ctrl+wheel) zoom
+  if (tallBoard() && !e.ctrlKey && !e.metaKey) {
+    const u = e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? view.h * 0.9 : 1;
+    let dx = e.deltaX * u, dy = e.deltaY * u;
+    if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+    scrollView(dx, dy);
+    return;
+  }
   const k = Math.exp(-clamp(e.deltaY * (e.deltaMode === 1 ? 16 : 1), -120, 120) * 0.0022);
   zoomAt(e.clientX, e.clientY, k);
 }
@@ -463,40 +521,276 @@ function duplicateSelected() {
   return id;
 }
 
-/* ---- The view: pan, zoom, fit; frame the run; follow the music on phones ----
- *  The base view fits the whole board. On top of it the user pans and zooms (VIEWCAM, board units), and a run is
- *  framed when it opens (its pieces fill the screen, zoom 1..3). Fit (F) toggles the whole board and the run.
- *  On a phone, while a demo plays, "Follow" zooms in (the board's height fills the screen) and glides along to
- *  where the next second of music is played; Stop puts the view back. */
+/* ---- The view: orbit, pan, zoom, fit, scroll a tower, follow the marble ----
+ *  VIEWCAM holds the user's pan (board units) and zoom on top of the fitted camera (zoom 1 = the whole board), and
+ *  CAMERA (75-render.js) the orbit: yaw and pitch about the TARGET, the board point in the middle of the free area.
+ *  All of it works at all times, playing included: orbiting a marble being followed swings round it. A Wide board is
+ *  shown whole and a run is framed when it opens (its pieces fill the screen). A TOWER (tallBoard) is worked on at
+ *  its HOME zoom, the board's width across the screen, and scrolled along: the wheel or a trackpad scrolls
+ *  (Ctrl+wheel and pinch zoom), a Shift-, right- or middle-drag (two fingers) pans (with a fling), the minimap
+ *  jumps, Page Up / Page Down, Home / End and the arrow keys (nothing selected) scroll. A plain drag (one finger)
+ *  orbits; Alt+arrows orbit in steps; the view widget (85-ui.js) orbits too and shows the angle. Fit (F) toggles
+ *  the whole board and the run, both from the front; 0 and Reset view go back to the front view.
+ *  During a session on a tower the camera FOLLOWS the lead marble (followCam): look-ahead from its predicted path
+ *  keeps the next pieces in view below it, a critically damped spring keeps the motion calm, and a jump of more than
+ *  a screen glides. Panning by hand pauses it (orbit, tilt and zoom do not); the Follow button (or a new Play)
+ *  resumes it. On a phone, a Wide board's demo is followed sideways instead (followWide).
+ *  Measures: VIEW.ppu() and viewSpan() are front-on at the target (a pure function of the camera's distance), so
+ *  nothing here changes with the angle; viewCentre() is the target itself; panBy() moves the board with the pointer
+ *  through the real camera. */
 const VIEWMODE = { mode: 'board' };                  // 'board' (whole board), 'run' (framed), 'free' (the user's own)
+const ZOOM_MIN = 0.75;
 function applyCam() { RENDER.applyCam(); OVL.sig = ''; }
-function panBy(dx, dy, user = true) {
-  const ppu = Math.max(0.02, VIEW.ppu());
-  VIEWCAM.panX = clamp(VIEWCAM.panX - dx / ppu, -BOARD_W * 0.6, BOARD_W * 0.6);
-  VIEWCAM.panY = clamp(VIEWCAM.panY - dy / ppu, -BOARD_H * 0.6, BOARD_H * 0.6);
-  if (user) setViewMode('free');
-  applyCam();
+function rectCentre(r) { return [(r.l + r.r) / 2, (r.t + r.b) / 2]; }
+// The board point in the middle of the free screen area (the target), and the board span that area shows front-on
+function viewCentre() { const c = rectCentre(uiSafeRect()); return VIEW.s2b(c[0], c[1]); }
+function viewSpan(r = uiSafeRect()) { const ppu = Math.max(1e-6, VIEW.ppu()); return [(r.r - r.l) / ppu, (r.b - r.t) / ppu]; }
+// The camera's distance from the target (the 3D camera's own; front-on equivalent for the 2D view)
+function camDist() { return glOk && GLR.cam.D ? GLR.cam.D : view.h / (2 * Math.max(1e-6, VIEW.ppu()) * Math.tan(fovYNow() / 2)); }
+function fovYNow() { return glOk && GLR.cam.fovY ? GLR.cam.fovY : 2 * Math.atan(Math.tan(CAMERA.fovDiag / 2) * view.h / Math.max(1, Math.hypot(view.w, view.h))); }
+const zoomForDist = (dist) => VIEWCAM.zoom * camDist() / Math.max(1, dist);
+
+/* ---- Orbit: yaw / pitch about the target. The limits are eased into (soft): the last 12% of each range is
+ *  compressed, so a drag slows down as it nears a limit and never snaps. A drag accumulates a RAW (unlimited) angle
+ *  that maps through softLimit; anything else (keys, the widget, the API) goes through orbitTo / orbitBy. A quick
+ *  drag let go spins on and settles (ORBIT.vyaw / vpitch). The cinematic swing (UI.cinematic, the demo strip) adds a
+ *  slow sine on top while a run plays (CAMERA.autoYaw / autoPitch), fading in and out. */
+const ORBIT = { vyaw: 0, vpitch: 0, raw: null, glide: null, autoT: 0, autoK: 0 };
+const SOFT = 0.12;
+function softLimit(raw, lo, hi) {
+  const w = Math.max(1e-6, (hi - lo) * SOFT);
+  if (raw > hi - w) return hi - w + w * (1 - Math.exp(-(raw - (hi - w)) / w));
+  if (raw < lo + w) return lo + w - w * (1 - Math.exp(-((lo + w) - raw) / w));
+  return raw;
 }
-function zoomAt(px, py, k) {
+function unsoft(v, lo, hi) {
+  const w = Math.max(1e-6, (hi - lo) * SOFT);
+  if (v > hi - w) return hi - w - w * Math.log(Math.max(1e-6, 1 - (v - (hi - w)) / w));
+  if (v < lo + w) return lo + w + w * Math.log(Math.max(1e-6, 1 - ((lo + w) - v) / w));
+  return v;
+}
+const yawLimits = () => [-CAMERA.yawMax, CAMERA.yawMax];
+function pitchLimits() { const c = glOk && GLR.cam.target; return [c ? pitchFloor(c[1], GLR.cam.D) : CAMERA.pitchMin, CAMERA.pitchMax]; }
+function orbitRaw() { const y = yawLimits(), p = pitchLimits(); return [unsoft(CAMERA.yaw, y[0], y[1]), unsoft(CAMERA.pitch, p[0], p[1])]; }
+function orbitGain() { return 0.9 * Math.PI / Math.max(320, view.w); }     // radians per px: a drag across the screen is ~160°
+function stopOrbitMotion() { ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null; ORBIT.glide = null; }
+// Turn by (dyaw, dpitch) radians, accumulating in raw (a drag's own, or the shared one)
+function orbitBy(dyaw, dpitch, raw = ORBIT.raw || (ORBIT.raw = orbitRaw())) {
+  if (!glOk) return;
+  ORBIT.glide = null;
+  raw[0] += dyaw; raw[1] += dpitch;
+  const y = yawLimits(), p = pitchLimits();
+  CAMERA.yaw = softLimit(raw[0], y[0], y[1]); CAMERA.pitch = softLimit(raw[1], p[0], p[1]);
+  applyCam(); refreshViewCube();
+}
+// Glide to an orientation (radians) over dur s (at once with reduced motion)
+function orbitTo(yaw, pitch, dur = 0.5) {
+  if (!glOk) return;
+  const y = yawLimits(), p = pitchLimits();
+  yaw = clamp(yaw, y[0], y[1]); pitch = clamp(pitch, p[0], p[1]);
+  ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null;
+  if (reducedMotion || dur <= 0) { ORBIT.glide = null; CAMERA.yaw = yaw; CAMERA.pitch = pitch; applyCam(); refreshViewCube(); return; }
+  ORBIT.glide = { y0: CAMERA.yaw, p0: CAMERA.pitch, y1: yaw, p1: pitch, t: 0, dur };
+}
+function orbitStep(dyaw, dpitch) { const r = orbitRaw(), y = yawLimits(), p = pitchLimits(); orbitTo(softLimit(r[0] + dyaw, y[0], y[1]), softLimit(r[1] + dpitch, p[0], p[1]), 0.25); }
+function frontView(dur = 0.5) { orbitTo(CAMERA.yaw0, CAMERA.pitch0, dur); }
+const isFrontView = () => Math.abs(CAMERA.yaw - CAMERA.yaw0) < 0.5 * RAD && Math.abs(CAMERA.pitch - CAMERA.pitch0) < 0.5 * RAD;
+// Run fn with the camera at the front view (for measuring a fit), then put the orbit back
+function withFrontCam(fn) {
+  const y = CAMERA.yaw, p = CAMERA.pitch, ay = CAMERA.autoYaw, ap = CAMERA.autoPitch;
+  CAMERA.yaw = CAMERA.yaw0; CAMERA.pitch = CAMERA.pitch0; CAMERA.autoYaw = CAMERA.autoPitch = 0;
+  try { fn(); } finally { CAMERA.yaw = y; CAMERA.pitch = p; CAMERA.autoYaw = ay; CAMERA.autoPitch = ap; applyCam(); }
+}
+// Each frame: the glide, the spin after a drag, the cinematic swing
+function stepOrbit(dt) {
+  if (!glOk) return;
+  let changed = false;
+  const G = ORBIT.glide;
+  if (G) {
+    G.t = Math.min(1, G.t + dt / G.dur);
+    const e = G.t < 0.5 ? 2 * G.t * G.t : 1 - Math.pow(-2 * G.t + 2, 2) / 2;
+    CAMERA.yaw = lerp(G.y0, G.y1, e); CAMERA.pitch = lerp(G.p0, G.p1, e);
+    if (G.t >= 1) ORBIT.glide = null;
+    changed = true;
+  } else if (ORBIT.vyaw || ORBIT.vpitch) {
+    if (!ORBIT.raw) ORBIT.raw = orbitRaw();
+    ORBIT.raw[0] += ORBIT.vyaw * dt; ORBIT.raw[1] += ORBIT.vpitch * dt;
+    const y = yawLimits(), p = pitchLimits();
+    CAMERA.yaw = softLimit(ORBIT.raw[0], y[0], y[1]); CAMERA.pitch = softLimit(ORBIT.raw[1], p[0], p[1]);
+    const k = Math.exp(-dt * 4.5);
+    ORBIT.vyaw *= k; ORBIT.vpitch *= k;
+    if (Math.hypot(ORBIT.vyaw, ORBIT.vpitch) < 0.02) { ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null; }
+    changed = true;
+  }
+  const swing = UI.cinematic && SIM.session && !reducedMotion && !(EDIT.drag && (EDIT.drag.kind === 'orbit' || EDIT.drag.kind === 'pinch'));
+  if (swing) {
+    ORBIT.autoT += dt; ORBIT.autoK = Math.min(1, ORBIT.autoK + dt / 2.5);
+    CAMERA.autoYaw = ORBIT.autoK * 0.34 * Math.sin(ORBIT.autoT * 2 * Math.PI / 30);
+    CAMERA.autoPitch = ORBIT.autoK * (0.06 * Math.sin(ORBIT.autoT * 2 * Math.PI / 21 + 1.2) + 0.05);
+    changed = true;
+  } else if (CAMERA.autoYaw || CAMERA.autoPitch) {
+    const k = Math.exp(-dt / 0.7);
+    CAMERA.autoYaw *= k; CAMERA.autoPitch *= k;
+    if (Math.abs(CAMERA.autoYaw) + Math.abs(CAMERA.autoPitch) < 2e-4) { CAMERA.autoYaw = CAMERA.autoPitch = 0; ORBIT.autoT = 0; }
+    ORBIT.autoK = 0;
+    changed = true;
+  }
+  if (changed) { applyCam(); refreshViewCube(); }
+}
+// The first time the view is turned by hand: say what does what (remembered: 'marbleMusic.orbitHint')
+function orbitHint(touch) {
+  if (store.get('marbleMusic.orbitHint')) return;
+  store.set('marbleMusic.orbitHint', '1');
+  toast(touch ? 'You are turning the view. Two fingers slide it, pinch zooms; the compass puts it back.'
+    : 'You are turning the view. Shift-drag slides it, the wheel ' + (tallBoard() ? 'scrolls' : 'zooms') + '; the compass puts it back.', null, null, 5000);
+}
+// Zoom in on a piece (double-click): it takes about two thirds of the free area
+function zoomToPiece(p) {
+  const r = uiSafeRect(), size = Math.max(60, pieceReach(p) * 2 + 20);
+  const want = Math.min(r.r - r.l, r.b - r.t) * 0.7 / size;
+  const z = clamp(VIEWCAM.zoom * want / Math.max(1e-6, VIEW.ppu()), ZOOM_MIN, zoomMax());
+  pauseFollow(); setViewMode('free'); TFOLLOW.userZoom = true;
+  glideTo(p.x, p.y, z, 0.5);
+}
+// The camera as the API reports it: angles in degrees, the distance, the target (board units), following
+function cameraState() {
+  const c = viewCentre(), yaw = glOk && GLR.cam.yaw != null ? GLR.cam.yaw : 0, pitch = glOk && GLR.cam.pitch != null ? GLR.cam.pitch : 0;
+  return { yaw: Math.round(yaw / RAD * 100) / 100, pitch: Math.round(pitch / RAD * 100) / 100, dist: Math.round(camDist() * 10) / 10,
+    target: [Math.round(c[0] * 10) / 10, Math.round(c[1] * 10) / 10], following: TFOLLOW.active && !TFOLLOW.paused };
+}
+// Set the camera at once (the API): yaw / pitch in degrees (clamped to the limits), dist, target [x, y]
+function setCameraState(o) {
+  o = o || {};
+  stopOrbitMotion(); VIEWCAM.glide = null; VIEWCAM.anim = null; SCROLLQ.x = SCROLLQ.y = 0; stopFling();
+  if (glOk) {
+    if (o.yaw != null && Number.isFinite(+o.yaw)) CAMERA.yaw = clamp(+o.yaw * RAD, -CAMERA.yawMax, CAMERA.yawMax);
+    if (o.pitch != null && Number.isFinite(+o.pitch)) CAMERA.pitch = clamp(+o.pitch * RAD, CAMERA.pitchMin, CAMERA.pitchMax);
+  }
+  if (o.dist != null && +o.dist > 0) { VIEWCAM.zoom = clamp(zoomForDist(+o.dist), ZOOM_MIN, zoomMax()); TFOLLOW.userZoom = true; setViewMode('free'); }
+  applyCam();
+  if (Array.isArray(o.target) && Number.isFinite(+o.target[0]) && Number.isFinite(+o.target[1])) { pauseFollow(); setViewMode('free'); setViewCentre(+o.target[0], +o.target[1]); }
+  else clampPan();
+  refreshViewCube();
+  return cameraState();
+}
+// Keep the board in view: the middle of the fitted area may pass the board's edge by a third of the view at most
+// (measured in the area the whole board is fitted to, so the untouched fitted view never moves)
+function clampPan() {
+  const r = boardFitRect(), B = FIT_BOX, [sw, sh] = viewSpan(r), cp = rectCentre(r), c = VIEW.s2b(cp[0], cp[1]);
+  const lim = (lo, hi, span, v) => { const pad = span * 0.3 + 40; let a = lo + span / 2 - pad, b = hi - span / 2 + pad; if (a > b) a = b = (lo + hi) / 2; return v < a ? a : v > b ? b : v; };
+  const dx = lim(B.x0, B.x1, sw, c[0]) - c[0], dy = lim(B.y0, B.y1, sh, c[1]) - c[1];
+  if (Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6) { VIEWCAM.panX += dx; VIEWCAM.panY += dy; applyCam(); }
+}
+// Put board point (x, y) in the middle of the free screen area (panning moves the camera along the board, so this
+// is exact in one step)
+function setViewCentre(x, y) {
+  const c = viewCentre();
+  VIEWCAM.panX += x - c[0]; VIEWCAM.panY += y - c[1];
+  applyCam(); clampPan();
+}
+// Closest: a marble fills a fifth of the screen (a view about 100 units tall) on the 3D camera; five home zooms in 2D
+function zoomMax() { return glOk && GLR.cam.D ? Math.max(6, zoomForDist(50 / Math.tan(fovYNow() / 2))) : Math.max(6, homeZoom() * 5); }
+function panBy(dx, dy, user = true) {                 // (screen px: the board moves with the pointer, through the real camera)
+  const c = rectCentre(uiSafeRect()), a = VIEW.s2b(c[0], c[1]), b = VIEW.s2b(c[0] - dx, c[1] - dy);
+  const mx = clamp(b[0] - a[0], -5000, 5000), my = clamp(b[1] - a[1], -5000, 5000);
+  VIEWCAM.panX += mx; VIEWCAM.panY += my;
+  applyCam(); clampPan();
+  if (user) { setViewMode('free'); pauseFollow(); }
+}
+// Zoom (a dolly) keeping the board point under (px, py) where it is. Zooming by hand does not pause the follow
+// camera (it keeps following at the new distance), but it stops it from zooming back in on its own (userZoom).
+function zoomAt(px, py, k, user = true) {
   const before = VIEW.s2b(px, py);
-  const z = clamp(VIEWCAM.zoom * k, 0.75, 6);
+  const z = clamp(VIEWCAM.zoom * k, ZOOM_MIN, zoomMax());
   if (z === VIEWCAM.zoom) return;
   VIEWCAM.zoom = z;
-  setViewMode('free');
+  if (user) { setViewMode('free'); TFOLLOW.userZoom = true; VIEWCAM.glide = null; }
   applyCam();
+  if (TFOLLOW.active && !TFOLLOW.paused) { clampPan(); return; }   // (following: zoom about the marble, not the pointer)
   for (let it = 0; it < 2; it++) {                    // keep the board point under the pointer where it is
     const after = VIEW.s2b(px, py);
-    VIEWCAM.panX += before[0] - after[0]; VIEWCAM.panY += before[1] - after[1];
+    VIEWCAM.panX += clamp(before[0] - after[0], -5000, 5000); VIEWCAM.panY += clamp(before[1] - after[1], -5000, 5000);
     applyCam();
   }
+  clampPan();
+}
+// A tower's home view: about four fifths of a board-width of it at a time (the board's width across the free area
+// on a phone held upright), so the pieces and the marble are big enough to watch
+function homeHeight() { const B = FIT_BOX; return Math.min(B.y1 - B.y0, Math.max(640, 0.78 * (B.x1 - B.x0))); }
+function homeZoom() {
+  if (!tallBoard()) return 1;
+  const r = uiSafeRect(), B = FIT_BOX, ppu = Math.max(1e-4, VIEW.ppu());
+  const want = Math.min((r.r - r.l) / (B.x1 - B.x0), (r.b - r.t) / homeHeight(), 1.3);
+  return Math.max(1, VIEWCAM.zoom * want / ppu);
 }
 // Pan the view by (dx, dy) screen px over ~0.3 s
 function glideView(dx, dy) {
   if (reducedMotion) { panBy(dx, dy, false); return; }
   VIEWCAM.anim = { dx, dy, done: 0, t: 0 };
 }
-function stepViewAnim(dt) {
-  follow(dt);
+// Glide the middle of the view to board point (x, y) (and zoom z) over `dur` s, eased at both ends
+function glideTo(x, y, z = VIEWCAM.zoom, dur = 0.45) {
+  const c = viewCentre();
+  VIEWCAM.anim = null;
+  if (reducedMotion || dur <= 0) { if (z !== VIEWCAM.zoom) { VIEWCAM.zoom = z; applyCam(); } setViewCentre(x, y); VIEWCAM.glide = null; return; }
+  VIEWCAM.glide = { x0: c[0], y0: c[1], z0: VIEWCAM.zoom, x, y, z, t: 0, dur };
+}
+function stepGlide(dt) {
+  const G = VIEWCAM.glide;
+  if (!G) return;
+  G.t = Math.min(1, G.t + dt / G.dur);
+  const e = G.t < 0.5 ? 4 * G.t * G.t * G.t : 1 - Math.pow(-2 * G.t + 2, 3) / 2;
+  const z = G.z0 * Math.pow(G.z / G.z0, e);
+  if (Math.abs(z - VIEWCAM.zoom) > 1e-9) { VIEWCAM.zoom = z; applyCam(); }
+  setViewCentre(G.x0 + (G.x - G.x0) * e, G.y0 + (G.y - G.y0) * e);
+  if (G.t >= 1) VIEWCAM.glide = null;
+}
+// Smooth scrolling (wheel, keys): screen px still to go, eased out over about 0.1 s
+const SCROLLQ = { x: 0, y: 0 };
+function scrollView(dx, dy) { VIEWCAM.glide = null; stopFling(); SCROLLQ.x += dx; SCROLLQ.y += dy; pauseFollow(); setViewMode('free'); }
+function stepScroll(dt) {
+  if (!SCROLLQ.x && !SCROLLQ.y) return;
+  const k = reducedMotion ? 1 : 1 - Math.exp(-dt / 0.07);
+  let mx = SCROLLQ.x * k, my = SCROLLQ.y * k;
+  if (Math.abs(SCROLLQ.x - mx) < 0.5 && Math.abs(SCROLLQ.y - my) < 0.5) { mx = SCROLLQ.x; my = SCROLLQ.y; }
+  SCROLLQ.x -= mx; SCROLLQ.y -= my;
+  panBy(-mx, -my);
+}
+// A drag of the board that is let go while moving keeps gliding and slows down
+const FLING = { vx: 0, vy: 0 };
+function stopFling() { FLING.vx = FLING.vy = 0; }
+function stepFling(dt) {
+  if (!FLING.vx && !FLING.vy) return;
+  panBy(FLING.vx * dt, FLING.vy * dt);
+  const k = Math.exp(-dt * 3.2);
+  FLING.vx *= k; FLING.vy *= k;
+  if (Math.hypot(FLING.vx, FLING.vy) < 25) stopFling();
+}
+// A piece dragged to the top or bottom edge of the free area on a tower scrolls the tower along (faster the nearer
+// the edge), and the piece stays under the pointer. (Armed once the pointer has been in the middle: a piece picked up
+// from the tray below does not scroll the tower on its way up.)
+const EDGE = { fn: null, e: null };
+function keepPointer(fn, e) { EDGE.fn = fn; EDGE.e = { clientX: e.clientX, clientY: e.clientY, pointerId: e.pointerId, altKey: e.altKey, shiftKey: e.shiftKey, pointerType: e.pointerType }; }
+function stepEdgeScroll(dt) {
+  const d = EDIT.drag;
+  if (!d || (d.kind !== 'move' && d.kind !== 'tray') || !EDGE.e || EDGE.e.pointerId !== d.id || !tallBoard()) { EDGE.e = null; return; }
+  if (d.kind === 'move' ? !d.moved : !EDIT.ghost) return;
+  const r = uiSafeRect(), y = EDGE.e.clientY, zone = 56;
+  if (!d.edgeArmed) { if (y > r.t + zone && y < r.b - zone) d.edgeArmed = true; return; }   // (only once it has been away from the edges)
+  const k = y < r.t + zone ? -(r.t + zone - y) / zone : y > r.b - zone && y < r.b + zone ? (y - (r.b - zone)) / zone : 0;
+  if (!k || EDGE.e.clientX < r.l - 20 || EDGE.e.clientX > r.r + 20) return;
+  panBy(0, -clamp(k, -1, 1) * 900 * dt);
+  EDGE.fn(EDGE.e);
+}
+// (realDt: the whole time since the last frame, up to 1 s: the camera keeps up with the marble however slow frames are)
+function stepViewAnim(dt, realDt = dt) {
+  stepEdgeScroll(dt);
+  followCam(realDt);
+  followWide(dt);
+  stepGlide(realDt);                                  // (glides keep to real time however slow the frames are)
+  stepScroll(dt);
+  stepFling(dt);
+  stepOrbit(realDt);                                  // (a glide keeps to real time however slow the frames are)
   const a = VIEWCAM.anim;
   if (!a) return;
   a.t = Math.min(1, a.t + dt / 0.3);
@@ -508,33 +802,39 @@ function stepViewAnim(dt) {
 function setViewMode(m) {
   if (VIEWMODE.mode === m) return;
   VIEWMODE.mode = m;
-  const b = $('#fitBtn'), toRun = m === 'board' && MODEL.pieces.length > 0 && !stripDemo();
+  const b = $('#fitBtn'), toRun = m === 'board' && MODEL.pieces.length > 0 && (!stripDemo() || tallBoard());
+  const whole = tallBoard() ? 'Show the whole tower (F)' : 'Show the whole board (F)';
   b.textContent = toRun ? 'Run' : 'Fit';
-  b.setAttribute('aria-label', toRun ? 'Zoom to the run (F)' : 'Show the whole board (F)');
-  b.title = toRun ? 'Zoom to the run (F)' : 'Show the whole board (F)';
+  b.setAttribute('aria-label', toRun ? 'Zoom to the run (F)' : whole);
+  b.title = toRun ? 'Zoom to the run (F)' : whole;
 }
-function fitView() { VIEWCAM.zoom = 1; VIEWCAM.panX = 0; VIEWCAM.panY = 0; VIEWCAM.anim = null; FOLLOW.saved = null; relayout(); VIEWMODE.mode = ''; setViewMode('board'); }
+function resetViewCam() { VIEWCAM.zoom = 1; VIEWCAM.panX = 0; VIEWCAM.panY = 0; VIEWCAM.anim = null; VIEWCAM.glide = null; SCROLLQ.x = SCROLLQ.y = 0; stopFling(); FOLLOW.saved = null; TFOLLOW.userZoom = false; }
+// The whole board (zoom 1), from the front
+function fitView() { resetViewCam(); frontView(); relayout(); VIEWMODE.mode = ''; setViewMode('board'); }
+// The view a board opens with: a Wide board whole; a tower from its top at the home zoom; from the front
+function homeView() {
+  if (!tallBoard() || !RENDER) { fitView(); return; }
+  resetViewCam(); frontView(); relayout();
+  VIEWCAM.zoom = homeZoom(); applyCam();
+  const [, sh] = viewSpan();
+  setViewCentre((FIT_BOX.x0 + FIT_BOX.x1) / 2, FIT_BOX.y0 + sh / 2 - 12);
+  VIEWMODE.mode = ''; setViewMode('run');
+}
+// Reset view (the widget, the API): the front view of the board as it opened; a run being followed stays followed
+function resetView() { homeView(); refreshViewCube(); }
 // Fit (F): the whole board, or (from the whole board) the run again
-function toggleFit() { if (VIEWMODE.mode === 'board' && MODEL.pieces.length && !stripDemo()) frameRun(); else fitView(); }
+function toggleFit() { if (VIEWMODE.mode === 'board' && MODEL.pieces.length && (!stripDemo() || tallBoard())) frameRun(); else fitView(); }
 // The board area the run takes: every piece's metal, dropper tubes and pails, plus a margin
 function runBox(pieces = MODEL.pieces) {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  const add = (x, y, r) => { x0 = Math.min(x0, x - r); x1 = Math.max(x1, x + r); y0 = Math.min(y0, y - r); y1 = Math.max(y1, y + r); };
-  for (const p of pieces) {
-    if (p.type === 'dropper') { add(p.x, p.y - 100, 22); add(p.x, p.y, 16); continue; }
-    for (const c of CANON.colliders(p)) {
-      if (c.shape === 'circle') add(c.x, c.y, c.r);
-      else { add(c.ax, c.ay, c.hw); add(c.bx, c.by, c.hw); }
-    }
-  }
-  if (!(x1 >= x0)) return null;
+  const b = piecesBox(pieces);
+  if (!b) return null;
   const m = 30, B = FIT_BOX;
-  return { x0: clamp(x0 - m, B.x0, B.x1), x1: clamp(x1 + m, B.x0, B.x1), y0: clamp(y0 - m, B.y0, B.y1), y1: clamp(y1 + m, B.y0, B.y1) };
+  return { x0: clamp(b.x0 - m, B.x0, B.x1), x1: clamp(b.x1 + m, B.x0, B.x1), y0: clamp(b.y0 - m, B.y0, B.y1), y1: clamp(b.y1 + m, B.y0, B.y1) };
 }
 // Frame a board box in the screen area the HUD leaves free (zoom zMin..zMax, at most 1.3 px per unit); works for
 // either renderer (it measures the view it gets)
 function frameBox(box, zMin = 1, zMax = 3, safe = uiSafeRect()) {
-  VIEWCAM.anim = null;
+  VIEWCAM.anim = null; VIEWCAM.glide = null;
   VIEWCAM.zoom = 1; VIEWCAM.panX = 0; VIEWCAM.panY = 0;
   applyCam();
   const sw = Math.max(40, safe.r - safe.l), sh = Math.max(40, safe.b - safe.t), cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2;
@@ -548,24 +848,129 @@ function frameBox(box, zMin = 1, zMax = 3, safe = uiSafeRect()) {
     VIEWCAM.zoom = Math.max(zMin, z);
     applyCam();
     const at = VIEW.s2b((safe.l + safe.r) / 2, (safe.t + safe.b) / 2);
-    VIEWCAM.panX = clamp(VIEWCAM.panX + cx - at[0], -BOARD_W * 0.6, BOARD_W * 0.6);
-    VIEWCAM.panY = clamp(VIEWCAM.panY + cy - at[1], -BOARD_H * 0.6, BOARD_H * 0.6);
+    VIEWCAM.panX += cx - at[0]; VIEWCAM.panY += cy - at[1];
     applyCam();
   }
 }
-// Frame the run on the board (a demo, which spans the board, and an empty board show the whole board)
+// Frame the run on the board (a Wide board's demo, which spans the board, and an empty board show the whole board).
+// A tower's run is framed from its top: at most a home view's height of it, never smaller than the home zoom.
 function frameRun() {
-  const box = !stripDemo() && runBox();
-  if (!box || !RENDER) { fitView(); return; }
+  const tall = tallBoard(), box = (tall || !stripDemo()) && runBox();
+  if (!box || !RENDER) { homeView(); return; }
   FOLLOW.saved = null;
-  frameBox(box);
+  frontView();
+  if (tall) {
+    resetViewCam(); relayout();
+    withFrontCam(() => {
+      const hz = homeZoom();
+      frameBox({ x0: box.x0, x1: box.x1, y0: box.y0, y1: Math.min(box.y1, box.y0 + homeHeight()) }, hz, zoomMax());
+      clampPan();
+    });
+    VIEWMODE.mode = ''; setViewMode('run');
+    return;
+  }
+  withFrontCam(() => frameBox(box));
   VIEWMODE.mode = ''; setViewMode(Math.abs(VIEWCAM.zoom - 1) < 0.02 && Math.abs(VIEWCAM.panX) < 1 && Math.abs(VIEWCAM.panY) < 1 ? 'board' : 'run');
 }
-// Phones: a small screen shows the whole board at under 0.25 px per unit, so a demo is followed instead
+
+/* ---- Following the marble down a tower ----
+ *  The lead marble is the oldest one in view of the physics (a song's single marble; with a repeating dropper, the
+ *  one furthest along). Its predicted path (the path preview: the same physics, still valid while the marble keeps
+ *  to it) says where it will be over the next 1.2 s; the view keeps the marble about a third of the way down and that
+ *  stretch in view below it. Between marbles (a hold: one marble into a cup, the next from a dropper just below) the
+ *  camera goes on to the dropper that releases next. */
+const TFOLLOW = { active: false, paused: false, vx: 0, vy: 0, ax: 0, ay: 0, leadId: null, last: null, lastLead: null, userZoom: false };
+const LEADPOS = [0, 0, 0];
+function pauseFollow() { if (TFOLLOW.active && !TFOLLOW.paused) { TFOLLOW.paused = true; refreshFollowBtn(); } }
+function resumeFollow() {
+  TFOLLOW.paused = false; TFOLLOW.vx = TFOLLOW.vy = 0; TFOLLOW.leadId = null; TFOLLOW.userZoom = false;
+  SCROLLQ.x = SCROLLQ.y = 0; stopFling();
+  refreshFollowBtn();
+  const aim = followAim();
+  if (aim) glideTo(aim.x, aim.y, Math.max(VIEWCAM.zoom, homeZoom() * 0.999), 0.6);
+}
+onSimChange((k) => { if (k === 'play') { TFOLLOW.paused = false; TFOLLOW.leadId = null; TFOLLOW.userZoom = false; } refreshFollowBtn(); });
+// The lead marble { id, x, y, aheadY } (display positions), or null
+function leadMarble() {
+  let best = null, bestM = null;
+  for (const m of drawnMarbles()) {
+    if (m.removedAt != null || !marbleDrawPos(m, LEADPOS)) continue;
+    if (!bestM || m.id < bestM.id) { bestM = m; best = { id: m.id, x: LEADPOS[0], y: LEADPOS[1] }; }
+  }
+  if (!best) return null;
+  // look ahead: the lowest point of its predicted path over the next 1.2 s, while it is still on that path; else
+  // from its speed
+  let ay = best.y + 100;
+  const pr = previewPaths(previewPieces(), previewKey()).get(bestM.dropperId);
+  const tau = SIM.dispT - bestM.bornT, P = pr && pr.path, i0 = Math.round(tau * 60);
+  if (P && i0 >= 0 && i0 < P.length && Math.hypot(P[i0][0] - best.x, P[i0][1] - best.y) < 30) {
+    for (let i = i0, e = Math.min(P.length, i0 + 73); i < e; i++) if (P[i][1] > ay) ay = P[i][1];
+  } else {
+    const back = Math.min(SIM.delaySteps + 24, (bestM.hn || 1) - 1);
+    if (bestM.hx && back > SIM.delaySteps) {
+      const k = ((bestM.hn - 1 - back) % HIST) * 3, vy = (best.y - bestM.hx[k + 1]) / ((back - SIM.delaySteps) * H_STEP);
+      ay = Math.max(ay, best.y + clamp(vy, 0, 900) * 0.9);
+    }
+  }
+  best.aheadY = ay;
+  return best;
+}
+// Where the middle of the view should be now: { x, y }, or null (nothing to follow yet)
+function followAim() {
+  const [sw, sh] = viewSpan();
+  let mx, my, ay;
+  const lead = leadMarble();
+  if (lead) { mx = lead.x; my = lead.y; ay = lead.aheadY; TFOLLOW.leadId = lead.id; }
+  else {
+    const w = SIM.world, r = w && SIM.playing ? w.releases[w.releaseIdx] : null;   // the marble that drops next, if soon
+    if (!r || r.t - SIM.dispT > 1.5) return null;
+    const d = pieceById(r.dropperId);
+    if (!d) return null;
+    mx = d.x; my = d.y - 40; ay = d.y + 160;
+  }
+  let cy = my + 0.15 * sh;                          // the marble a third of the way down the view,
+  cy = Math.max(cy, ay - 0.35 * sh);                // the next 1.2 s of its way in view below it (to 85 %),
+  cy = Math.min(cy, my + 0.3 * sh);                 // but never higher than a fifth of the way down
+  const B = FIT_BOX, fits = B.x1 - B.x0 <= sw * 1.02;
+  return { x: fits ? (B.x0 + B.x1) / 2 : mx, y: cy };
+}
+// Each frame while a session runs on a tower: the view moves along with the aim's (smoothed) speed and a critically
+// damped spring (an exact step: calm at any frame rate) takes up the rest, so a steady fall is followed without lag
+// and a turn is taken smoothly; a jump of more than a screen glides instead, zooming in to the home zoom first if the
+// view is further out than that
+function followCam(dt) {
+  const want = tallBoard() && SIM.session && !!RENDER;
+  if (!want) { if (TFOLLOW.active) { TFOLLOW.active = false; refreshFollowBtn(); } return; }
+  if (!TFOLLOW.active) { Object.assign(TFOLLOW, { active: true, paused: false, vx: 0, vy: 0, ax: 0, ay: 0, leadId: null, last: null }); refreshFollowBtn(); }
+  // (an orbit or a pinch in progress does not stop the following: the view keeps swinging round the marble)
+  const d = EDIT.drag, editing = d && (d.kind === 'move' || d.kind === 'handle' || d.kind === 'pan');
+  if (TFOLLOW.paused || editing || dt <= 0) { TFOLLOW.last = null; return; }
+  const aim = followAim();
+  if (!aim) { TFOLLOW.last = null; return; }
+  const L = TFOLLOW.last, same = L && TFOLLOW.leadId === TFOLLOW.lastLead, kf = 1 - Math.exp(-dt / 0.25);
+  TFOLLOW.ax += ((same ? clamp((aim.x - L.x) / dt, -1500, 1500) : 0) - TFOLLOW.ax) * kf;
+  TFOLLOW.ay += ((same ? clamp((aim.y - L.y) / dt, -1500, 1500) : 0) - TFOLLOW.ay) * kf;
+  TFOLLOW.last = { x: aim.x, y: aim.y }; TFOLLOW.lastLead = TFOLLOW.leadId;
+  const G = VIEWCAM.glide;
+  if (G) { G.x = aim.x; G.y = aim.y; return; }             // (a glide in progress lands on the moving aim)
+  const hz = homeZoom();
+  if (VIEWCAM.zoom < hz * 0.85 && !TFOLLOW.userZoom) { glideTo(aim.x, aim.y, hz, 0.9); TFOLLOW.vx = TFOLLOW.vy = 0; return; }   // (a zoom set by hand is kept)
+  const c = viewCentre(), [sw, sh] = viewSpan();
+  const ox = c[0] + TFOLLOW.ax * dt - aim.x, oy = c[1] + TFOLLOW.ay * dt - aim.y;
+  if (Math.abs(oy) > 1.1 * sh || Math.abs(ox) > 1.1 * sw) { glideTo(aim.x, aim.y, VIEWCAM.zoom, 0.8); TFOLLOW.vx = TFOLLOW.vy = 0; return; }
+  const w = 3.4, e = Math.exp(-w * dt);
+  const step = (x0, v0) => { const b = v0 + w * x0; return [(x0 + b * dt) * e, (v0 - w * b * dt) * e]; };
+  const [nx, nvx] = step(ox, TFOLLOW.vx), [ny, nvy] = step(oy, TFOLLOW.vy);
+  TFOLLOW.vx = nvx; TFOLLOW.vy = nvy;
+  if (Math.abs(aim.x + nx - c[0]) > 0.01 || Math.abs(aim.y + ny - c[1]) > 0.01) setViewCentre(aim.x + nx, aim.y + ny);
+}
+
+/* ---- Phones, a Wide board's demo playing: "Follow" zooms in (the board's height fills the screen) and glides along
+ *  to where the next second of music is played; Stop puts the view back ---- */
 const FOLLOW = { on: store.get('marbleMusic.follow') !== '0', active: false, saved: null, x: null };
 const phoneView = () => window.innerWidth < 720 || window.matchMedia('(orientation: landscape) and (max-height: 540px)').matches;
-function follow(dt) {
-  const want = FOLLOW.on && SIM.playing && !!MODEL.demoId && phoneView() && !EDIT.drag;
+function followWide(dt) {
+  const want = FOLLOW.on && SIM.playing && !!MODEL.demoId && phoneView() && !EDIT.drag && !tallBoard();
   if (!want) {
     if (FOLLOW.active) {                             // Stop: the view the user had
       FOLLOW.active = false;
@@ -584,7 +989,7 @@ function follow(dt) {
       for (const c of CANON.colliders(p)) { const top = c.shape === 'circle' ? c.y - c.r : Math.min(c.ay, c.by) - c.hw, bot = c.shape === 'circle' ? c.y + c.r : Math.max(c.ay, c.by) + c.hw; y0 = Math.min(y0, top); y1 = Math.max(y1, bot + 12); }
     }
     if (!(y1 > y0)) { y0 = 0; y1 = BOARD_H; }
-    frameBox({ x0: BOARD_W / 2 - 50, x1: BOARD_W / 2 + 50, y0, y1 }, 1, 4);
+    withFrontCam(() => frameBox({ x0: BOARD_W / 2 - 50, x1: BOARD_W / 2 + 50, y0, y1 }, 1, 4));
     FOLLOW.x = null;
     setViewMode('free');
   }
@@ -634,6 +1039,20 @@ window.addEventListener('keydown', (e) => {
   if (k === '+' || k === '=') { zoomAt(view.w / 2, view.h / 2, 1.25); return; }
   if (k === '-' || k === '_') { zoomAt(view.w / 2, view.h / 2, 0.8); return; }
   if (k === 'h' || k === 'H' || k === '?') { openHelp(); return; }
+  if (e.altKey && k.startsWith('Arrow')) {                        // Alt+arrows: orbit in 10° steps (Shift: 30°)
+    e.preventDefault();
+    const s = (e.shiftKey ? 30 : 10) * RAD;
+    orbitStep(k === 'ArrowLeft' ? s : k === 'ArrowRight' ? -s : 0, k === 'ArrowUp' ? s : k === 'ArrowDown' ? -s : 0);
+    return;
+  }
+  if (tallBoard() && (k === 'PageDown' || k === 'PageUp' || k === 'Home' || k === 'End')) {   // scroll the tower
+    e.preventDefault();
+    const [, sh] = viewSpan(), c = viewCentre();
+    if (k === 'Home' || k === 'End') { pauseFollow(); setViewMode('free'); glideTo(c[0], k === 'Home' ? FIT_BOX.y0 + sh / 2 : FIT_BOX.y1 - sh / 2, VIEWCAM.zoom, 0.6); }
+    else scrollView(0, (k === 'PageDown' ? 0.85 : -0.85) * sh * VIEW.ppu());
+    return;
+  }
+  if (tallBoard() && !EDIT.selected && (k === 'ArrowUp' || k === 'ArrowDown') && !onButton) { e.preventDefault(); scrollView(0, (k === 'ArrowDown' ? 0.15 : -0.15) * viewSpan()[1] * VIEW.ppu()); return; }
   if ((k === '[' || k === ']') && MODEL.pieces.length) {         // keyboard: step through the pieces
     const i = MODEL.pieces.findIndex((p) => p.id === EDIT.selected), n = MODEL.pieces.length;
     const p = MODEL.pieces[((i < 0 ? (k === ']' ? -1 : 0) : i) + (k === ']' ? 1 : -1) + n) % n];
@@ -643,10 +1062,18 @@ window.addEventListener('keydown', (e) => {
   }
   if (k.startsWith('Arrow') && EDIT.selected && !onButton) {
     e.preventDefault();
-    const s = e.altKey ? 1 : GRID;
+    const s = e.shiftKey ? 1 : GRID;
     nudgeSelected(k === 'ArrowLeft' ? -s : k === 'ArrowRight' ? s : 0, k === 'ArrowUp' ? -s : k === 'ArrowDown' ? s : 0);
   }
 });
+// Double-click a piece: zoom in on it
+function boardDblClick(e) {
+  const bp = VIEW.s2b(e.clientX, e.clientY), p = pieceAt(bp[0], bp[1], 8 / Math.max(0.05, VIEW.ppu()));
+  if (!p) return;
+  e.preventDefault();
+  select(p.id, false);
+  zoomToPiece(p);
+}
 
 function attachInput() {
   const stage = stageEl();
@@ -658,6 +1085,7 @@ function attachInput() {
   stage.addEventListener('pointercancel', boardUp);
   stage.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !EDIT.drag) EDIT.hover = null; });
   stage.addEventListener('wheel', boardWheel, { passive: false });
+  stage.addEventListener('dblclick', boardDblClick);
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 function attachTray() {

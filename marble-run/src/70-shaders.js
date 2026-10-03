@@ -6,14 +6,18 @@ const INST_PER_ROW = 256;                // pieces per row of the per-instance d
 // MARBLE_SHADOWS (a #define set by compilePrograms from the GPU's uniform budget): how many marbles cast soft
 // shadows at once. Any number of marbles is drawn; the rolling ones come first in the shadow list.
 // Sunlight comes in through a window: a lit parallelogram with mullion shadows, projected along the sun direction
-// (shared by every shader that is lit by the sun; the marbles evaluate it per vertex)
+// (shared by every shader that is lit by the sun; the marbles evaluate it per vertex). On a tower the window is as
+// tall as the tower: the patch's gentle top-left-to-bottom-right fall-off is folded (a smooth wave along v), so every
+// storey of the tower gets the same warm light instead of the lower storeys fading to the skylight.
 const GLSL_WINDOW = `
 uniform vec4 uWinU;      // xyz: window-plane axis across the sun direction, w: offset (world -> window plane)
 uniform vec4 uWinV;      // xyz: window-plane axis up the window, w: offset
 uniform vec4 uWinRect;   // the lit rectangle in window-plane units: u0, v0, u1, v1
 uniform vec4 uWinBars;   // x: u of the upright mullion, y: v of the transom, z: half bar width, w: penumbra per unit of depth
+uniform vec4 uWinFold;   // x: fold period in v (0: none), y: v at the board's top
 float windowCookie(vec3 wp, vec3 sunDir) {
   float u = dot(wp, uWinU.xyz) + uWinU.w, v = dot(wp, uWinV.xyz) + uWinV.w;
+  if (uWinFold.x > 0.0) v = uWinFold.y - uWinFold.x * (0.5 - 0.5 * cos(3.14159265 * (uWinFold.y - v) / uWinFold.x));
   float d = max(uWinBars.w * (900.0 - dot(wp, sunDir)), 1.5);   // the farther from the window, the softer the edge
   float lit = smoothstep(uWinRect.x - d, uWinRect.x + d, u) * smoothstep(uWinRect.z + d, uWinRect.z - d, u)
             * smoothstep(uWinRect.y - d, uWinRect.y + d, v) * smoothstep(uWinRect.w + d, uWinRect.w - d, v);
@@ -171,9 +175,15 @@ vec3 decodeScene(vec3 c) {
 // Pieces are drawn instanced: every piece that shares a mesh in one draw. Each instance has three texels in uInst
 // (see frameInstances): x, y (3D), cos, sin of its turn about Z | z lift (picked up), scale, glow, stretch | glow colour.
 // Row 0 is the room (no transform); a draw's instances start at uInstBase.
+// Material flags (aMat.w): 0 plain, 1 engraved letters, 4 glue, 5 emissive (a ceiling light), 6 a one-sided room
+// surface (the desk, the ceiling, the side walls: clipped away when the eye is behind its plane, so a camera that
+// orbits out past the room never has an opaque floor or ceiling between it and the tower; the opaque pass draws both
+// faces of everything else), 7 emissive and one-sided. The plane a one-sided surface is clipped by is its own normal,
+// or, for something standing on a wall (a window frame), the wall's: aMat.z = 1 +x, 2 -x, 3 -y (a ceiling), 4 +y.
 const VS_PBR = `
 in vec3 aPos; in vec3 aNrm; in vec2 aUv; in vec4 aTan; in vec4 aCol; in vec4 aMat;
 uniform mat4 uViewProj;
+uniform vec3 uCamPos;
 uniform highp sampler2D uInst;
 uniform int uInstBase;
 out vec3 vPos; out vec3 vNrm; out vec4 vTan; out vec2 vUv; out vec4 vCol; out vec4 vMat; out float vGlow; flat out vec3 vGlowCol;
@@ -191,6 +201,10 @@ void main() {
   vPos = p; vNrm = n; vTan = vec4(t, aTan.w); vUv = aUv; vCol = aCol; vMat = aMat;
   vGlow = fx.z; vGlowCol = texelFetch(uInst, instTexel(i, 2), 0).rgb;
   gl_Position = uViewProj * vec4(p, 1.0);
+  if (aMat.w > 5.5) {                                          // one-sided: seen from behind its plane, clipped away
+    vec3 cn = aMat.z < 0.5 ? n : aMat.z < 1.5 ? vec3(1.0, 0.0, 0.0) : aMat.z < 2.5 ? vec3(-1.0, 0.0, 0.0) : aMat.z < 3.5 ? vec3(0.0, -1.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    if (dot(uCamPos - p, cn) < 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  }
 }`;
 
 const FS_PBR = GLSL_COMMON + `
@@ -207,9 +221,12 @@ uniform int uDebug;
 in vec3 vPos; in vec3 vNrm; in vec4 vTan; in vec2 vUv; in vec4 vCol; in vec4 vMat; in float vGlow; flat in vec3 vGlowCol;
 out vec4 outColor;
 void main() {
+  float flag = vMat.w;
+  if ((flag > 4.5 && flag < 5.5) || flag > 6.5) {            // emissive (the ceiling's light strips): its own light, no shading
+    outColor = encodeScene(vCol.rgb * 5.5); outColor.a = uEdgeAA; return;
+  }
   vec4 alb = texture(uAlb, vUv, uLodBias);
   vec4 surf = texture(uSurf, vUv, uLodBias);
-  float flag = vMat.w;
   vec3 albedo; float ao, engr = 1.0;
   if (flag > 0.5 && flag < 1.5) {
     // engraved letters only where they are big enough to read (about 9 px tall on screen); smaller, a plain face
@@ -257,6 +274,7 @@ void main() {
   // ambient: SH irradiance + prefiltered environment, occluded by the baked AO and nearby marbles
   float occ = ao * mao;
   vec3 irr = shIrradiance(N);
+  if (flag > 5.5) irr += vec3(0.62, 0.59, 0.54) + vec3(0.55, 0.45, 0.32) * max(-N.y, 0.0);   // the room's far surfaces (side walls, ceiling, desk): daylight bounced round the room, the sunlit desk's warm bounce up on the ceiling
   vec3 envB = envBRDF(f0, rough, NoV);
   vec3 R = reflect(-V, N);
   float horizon = clamp(1.0 + 1.3 * dot(R, N0), 0.0, 1.0);

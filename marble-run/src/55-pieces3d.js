@@ -94,6 +94,28 @@ function latheZ(mb, rows, cols = 40) {
     }, { wrapJ: true });
 }
 const put = (mb, col, fin, flag = 0) => { mb.setCol(col[0], col[1], col[2], 1); mb.setMat(fin[0], fin[1], 0, flag); return mb; };
+// A rubber washer where a post meets the board (every bracket stands on one: the piece visibly touches the board)
+function foot(M, x, y, r) {
+  const rub = put(M('misc'), RUBBER, FIN.rubber);
+  latheZ(rub, [[0.12, r + 0.7], [1.0, r + 0.5], [1.7, r - 0.4], [1.7, 0.01]], 16);
+  translateLast(rub, x, y);
+}
+// A chrome pan-head screw on a surface at z, at local (x, y)
+function screw(M, x, y, z, r = 1.9) {
+  const s = put(M('metal'), CHROME, FIN.chrome);
+  latheZ(s, [[z - 0.1, r], [z + 0.9, r * 0.95], [z + 1.5, r * 0.6], [z + 1.7, 0.01]], 14);
+  translateLast(s, x, y);
+}
+
+// A rail bracket at local (x, y), turned by `ang` (radians, clockwise on screen): a tie in the note's colour that
+// clamps the twin rods (half spacing dz; it reaches up between them), standing on the board on a satin steel foot
+// plate with two chrome screws. Everything of it in the marble's reach lies inside the rail's collider outline.
+function bracket(M, x, y, ang, note, dz) {
+  const c = Math.cos(ang), s = Math.sin(ang), at = ([u, v]) => [x + c * u - s * v, y + s * u + c * v];
+  prism(put(M('metal'), anodCol(note), FIN.anod), roundRectPts(1.8, 2.2, 0.8, 2).map(at), 1.4, ZM + dz + 1.5, 0.5, (u, v) => [u / 64, v / 64]);
+  prism(put(M('metal'), STEEL, FIN.satin), roundRectPts(5.6, 3.3, 1.2, 3).map(at), 0.2, 1.6, 0.4, (u, v) => [u / 64, v / 64 + 0.3]);
+  for (const u of [-3.7, 3.7]) { const q = at([u, 1.6]); screw(M, q[0], q[1], 1.6, 1.15); }
+}
 
 /* ---- The pieces ---- */
 const PIECE_BUILD = {
@@ -124,34 +146,40 @@ const PIECE_BUILD = {
       translateLast(scr, x, 0);
       postZ(put(M('metal'), STEEL, FIN.satin), x, 0, 2.6, 0, z0 + 0.5, 0);
     }
+    // resonator: a satin steel plate on the board behind the bar with a dark slot (the bar's air column) cut into
+    // it below the bar; the plate has thickness and the slot real depth, so the bar stands off the board
+    const px = hx + 5, py = hy + 8, pz = 3.2, rp = put(M('metal'), [0.64, 0.65, 0.67], FIN.satin);
+    prism(rp, roundRectPts(px, py, 1.2, 3), 0.3, pz, 0.7, (x, y) => [x / 64, y / 64 + 0.5], { front: false });
+    const fx = px - 0.7, fy = py - 0.7, s0x = -hx + 4, s1x = hx - 4, s0y = hy + 1.2, s1y = hy + 5.4, fl = 0.8;
+    const fq = (a, b, c, d, z = pz, n = [0, 0, 1]) => flatQuad(rp, P3(a[0], a[1], z), P3(b[0], b[1], z), P3(c[0], c[1], z), P3(d[0], d[1], z), n,
+      [a[0] / 64, a[1] / 64 + 0.5], [b[0] / 64, b[1] / 64 + 0.5], [c[0] / 64, c[1] / 64 + 0.5], [d[0] / 64, d[1] / 64 + 0.5]);
+    fq([-fx, -fy], [fx, -fy], [fx, s0y], [-fx, s0y]); fq([-fx, s1y], [fx, s1y], [fx, fy], [-fx, fy]);
+    fq([-fx, s0y], [s0x, s0y], [s0x, s1y], [-fx, s1y]); fq([s1x, s0y], [fx, s0y], [fx, s1y], [s1x, s1y]);
+    const wq = (a, b, n) => flatQuad(rp, P3(a[0], a[1], pz), P3(b[0], b[1], pz), P3(b[0], b[1], fl), P3(a[0], a[1], fl), n, [0, 0], [0.4, 0], [0.4, 0.04], [0, 0.04]);
+    wq([s0x, s0y], [s1x, s0y], [0, -1, 0]); wq([s0x, s1y], [s1x, s1y], [0, 1, 0]); wq([s0x, s0y], [s0x, s1y], [1, 0, 0]); wq([s1x, s0y], [s1x, s1y], [-1, 0, 0]);
+    const dark = put(M('misc'), [0.02, 0.02, 0.025], [2.5, 0]);
+    flatQuad(dark, P3(s0x, s0y, fl), P3(s1x, s0y, fl), P3(s1x, s1y, fl), P3(s0x, s1y, fl), [0, 0, 1], [0, 0], [1, 0], [1, 1], [0, 1]);
+    for (const x of [-px + 3.2, px - 3.2]) screw(M, x, py - 3.2, pz, 1.5);
   },
-  // Chrome twin-rod track on steel ties, held off the board by standoffs; the ties carry the note's colour
+  // Chrome twin-rod track clamped in a row of brackets (`bracket`: a tie in the note's colour standing on the board
+  // on a steel foot plate with two screws), so the rail visibly stands off the board from any angle
   rail(p, M) {
     const L = p.len, hw = CANON.HW.rail, rr = 2.3, yRod = -hw + 2.1, dz = 5.6;
     const ch = put(M('metal'), CHROME, FIN.chrome);
     for (const s of [-1, 1]) rod(ch, [P3(-L / 2, yRod, ZM + s * dz), P3(L / 2, yRod, ZM + s * dz)], rr, 14);
     const nt = Math.max(2, Math.round(L / 46) + 1);
-    const tie = put(M('metal'), anodCol(p.note), FIN.anod);
-    for (let i = 0; i < nt; i++) {
-      const x = -L / 2 + 6 + (L - 12) * i / (nt - 1);
-      prism(tie, roundRectPts(1.8, 2.2, 0.8, 2).map(([a, b]) => [a + x, b + yRod + 2.6]), ZM - dz - 1.5, ZM + dz + 1.5, 0.5, (u, v) => [u / 64, v / 64]);
-    }
-    const sp = put(M('metal'), STEEL, FIN.satin), ns = Math.max(2, Math.round(L / 110) + 1);
-    for (let i = 0; i < ns; i++) { const x = -L / 2 + 10 + (L - 20) * i / (ns - 1); postZ(sp, x, yRod + 2.6, 1.9, 0, ZM - dz - 1.4, 0); }
+    for (let i = 0; i < nt; i++) bracket(M, -L / 2 + 6 + (L - 12) * i / (nt - 1), yRod + 2.6, 0, p.note, dz);
   },
-  // The same track bent round an arc (rods on the collider arc; the arc is drawn smooth)
+  // The same track bent round an arc (rods on the collider arc; the arc is drawn smooth), its brackets radial
   curve(p, M) {
     const r = p.r, sw = p.sweep, rr = 2.3, dz = 5.6, n = Math.max(8, Math.ceil(sw / 4));
     const ch = put(M('metal'), CHROME, FIN.chrome);
     const at = (a, rad, z) => P3(Math.cos(a * RAD) * rad, Math.sin(a * RAD) * rad, z);
     for (const s of [-1, 1]) { const path = []; for (let i = 0; i <= n; i++) path.push(at(sw * i / n, r, ZM + s * dz)); rod(ch, path, rr, 12); }
     const nt = Math.max(2, Math.round((sw * RAD * r) / 40) + 1);
-    const tie = put(M('metal'), anodCol(p.note), FIN.anod), sp = put(M('metal'), STEEL, FIN.satin);
     for (let i = 0; i < nt; i++) {
-      const a = (sw * (i + 0.5)) / nt, c = Math.cos(a * RAD), s2 = Math.sin(a * RAD);
-      const o = roundRectPts(1.8, 2.3, 0.8, 2).map(([u, v]) => [c * r + (-s2) * u + c * v, s2 * r + c * u + s2 * v]);
-      prism(tie, o, ZM - dz - 1.5, ZM + dz + 1.5, 0.5, (u, v) => [u / 64, v / 64]);
-      if (i % 2 === 0 || nt <= 3) postZ(sp, c * r, s2 * r, 1.9, 0, ZM - dz - 1.4, 0);
+      const a = (sw * (i + 0.5)) / nt * RAD;
+      bracket(M, Math.cos(a) * r, Math.sin(a) * r, a + Math.PI / 2, p.note, dz);
     }
   },
   // Polished brass dome bumper on a steel stem, with a band of the note's colour round its skirt
@@ -164,6 +192,9 @@ const PIECE_BUILD = {
     latheZ(band, [[ZM - 6, r + 0.45], [ZM - 5.4, r + 0.8], [ZM - 2.6, r + 0.8], [ZM - 2.0, r + 0.45]], 44);
     const nut = put(M('metal'), CHROME, FIN.chrome);
     latheZ(nut, [[ZM + 1.5 + r * 0.62 - 0.4, 2.4], [ZM + 1.5 + r * 0.62 + 0.8, 2.3], [ZM + 1.5 + r * 0.62 + 1.6, 1.4], [ZM + 1.5 + r * 0.62 + 1.9, 0.01]], 16);
+    // a satin steel base flange screwed to the board (the dome stands on it)
+    latheZ(put(M('metal'), STEEL, FIN.satin), [[0.2, r + 4.5], [1.4, r + 4.3], [2.4, r + 2.2], [2.4, r * 0.9]], 36);
+    for (let k = 0; k < 3; k++) { const a = k * Math.PI * 2 / 3 + 0.5; screw(M, Math.cos(a) * (r + 2.9), Math.sin(a) * (r + 2.9), 1.4, 1.3); }
   },
   // Trampoline pad: a coloured rubber-topped steel plate on coil springs over a base bar
   spring(p, M) {
@@ -180,7 +211,7 @@ const PIECE_BUILD = {
       rod(coil, path, 0.8, 6, false);
     }
     prism(put(M('metal'), STEEL, FIN.satin), roundRectPts(hx - 2, 1.6, 1).map(([x, y]) => [x, y + hw + 15]), ZM - 8, ZM + 8, 0.6, (x, y) => [x / 64, y / 64]);
-    for (const x of [-hx * 0.6, hx * 0.6]) postZ(put(M('metal'), STEEL, FIN.satin), x, hw + 15, 2, 0, ZM - 8, 0);
+    for (const x of [-hx * 0.6, hx * 0.6]) { postZ(put(M('metal'), STEEL, FIN.satin), x, hw + 15, 2.2, 0, ZM - 8, 0); foot(M, x, hw + 15, 3.3); }
   },
   // Brushed steel stop plate with a stripe of the note's colour and two bolts
   wall(p, M) {
@@ -189,7 +220,7 @@ const PIECE_BUILD = {
     const st = put(M('metal'), anodCol(p.note), FIN.anod);
     flatQuad(st, P3(-hx + 2, -1.6, ZM + 11.02), P3(hx - 2, -1.6, ZM + 11.02), P3(hx - 2, 1.6, ZM + 11.02), P3(-hx + 2, 1.6, ZM + 11.02), [0, 0, 1], [0, 0], [1, 0], [1, 0.1], [0, 0.1]);
     for (const x of [-hx + 7, hx - 7]) { const b = put(M('metal'), CHROME, FIN.chrome); latheZ(b, [[ZM + 11, 2.3], [ZM + 11.9, 2.2], [ZM + 12.6, 1.4], [ZM + 12.9, 0.01]], 14); translateLast(b, x, 0); }
-    for (const x of [-hx * 0.55, hx * 0.55]) postZ(put(M('metal'), STEEL, FIN.satin), x, 0, 2.4, 0, ZM - 10.5, 0);
+    for (const x of [-hx * 0.55, hx * 0.55]) { postZ(put(M('metal'), STEEL, FIN.satin), x, 0, 2.4, 0, ZM - 10.5, 0); foot(M, x, 0, 3.5); }
   },
   // Spun steel funnel: a flattened half-cone (an elliptical cross-section) whose back rests on the board. In the
   // marble plane its walls are exactly CANON's funnel lines (x radius); the z semi-axis is squashed so the shell
@@ -221,7 +252,7 @@ const PIECE_BUILD = {
     for (let j = 0; j <= 18; j++) ring.push(at(rN + 1.2, C + 1.2, a0 + (a1 - a0) * j / 18, h2 + 1));
     rod(collar, ring, 2.2, 8);
     // standoffs from the board to the shell's back, on its centre line
-    for (const y of [-h2 * 0.45, h2 * 0.35, h2 + 12]) postZ(put(M('metal'), STEEL, FIN.satin), 0, y, 2.4, 0, ZM - C + 0.4, 0);
+    for (const y of [-h2 * 0.45, h2 * 0.35, h2 + 12]) { postZ(put(M('metal'), STEEL, FIN.satin), 0, y, 2.4, 0, ZM - C + 0.4, 0); foot(M, 0, y, 3.5); }
   },
   // Brass drop tube with a loading hopper on top, a 70-degree sight slot down its front (you can see the marble
   // waiting in it) and a little gate at the bottom (the gate is its own mesh)
@@ -249,8 +280,9 @@ const PIECE_BUILD = {
     latheY(br, [[top, R], [top - 16, R + 8], [top - 17.6, R + 8.4], [top - 18.2, R + 7.6], [top - 17, Ri + 7.8]], full[0], full[1], 40, false);
     // two clamp brackets to the board
     for (const y of [top + 4, bot - 6]) {
-      prism(put(M('metal'), STEEL, FIN.satin), roundRectPts(9, 3, 1.2).map(([x, yy]) => [x, yy + y]), 0, ZM - R + 0.8, 0.6, (x, yy) => [x / 64, yy / 64]);
+      prism(put(M('metal'), STEEL, FIN.satin), roundRectPts(11, 3.4, 1.2).map(([x, yy]) => [x, yy + y]), 0, ZM - R + 0.8, 0.6, (x, yy) => [x / 64, yy / 64]);
       rod(put(M('metal'), STEEL, FIN.satin), (() => { const q = []; for (let j = 0; j <= 12; j++) { const a = (j / 12) * Math.PI; q.push([Math.cos(a) * (R + 0.9), -y, ZM + Math.sin(a) * (R + 0.9)]); } return q; })(), 1.1, 6, false);
+      for (const x of [-8.2, 8.2]) screw(M, x, y, ZM - R + 0.8, 1.4);
     }
   },
   // Wall-mounted galvanised pail (D-shaped: flat against the board), wire handle and a painted band
@@ -276,6 +308,7 @@ const PIECE_BUILD = {
     const back = [];                                 // flat back plate against the board
     for (const [x, y] of [[-35, -30], [35, -30], [30, 30], [-30, 30]]) back.push(P3(x * 0.99, y, 1.6));
     flatFan(galv, back, [0, 0, 1], (q) => [q[0] / 64, q[1] / 64]);
+    for (const [x, y] of [[-16, -20], [16, -20], [0, 14]]) screw(M, x, y, 1.6, 1.6);   // screwed to the board through its back
     const wire = put(M('misc'), [0.55, 0.56, 0.58], [1.2, 1]), h = [];
     for (let j = 0; j <= 20; j++) { const a = Math.PI * j / 20; h.push([Math.cos(a) * 36.2, 22 + Math.sin(a) * 24, ZM + 12 + Math.sin(a) * 10]); }
     rod(wire, h, 0.9, 6);
@@ -296,7 +329,20 @@ function buildPieceMeshes(p) {
   const M = (mat) => { let b = mbs[mat]; if (!b) { b = mbs[mat] = new MeshBuilder(); } markStart(b); return b; };
   const f = PIECE_BUILD[p.type];
   if (f) f(p, M);
+  for (const mat in mbs) bakeContactAO(mbs[mat]);
   return mbs;
+}
+// Contact occlusion baked into the vertex AO (colour alpha): where a piece meets the board (posts, feet, plates,
+// the backs of tubes and pails, a dome's skirt) it darkens towards z = 0, so pieces sit on the board instead of
+// floating over it. Only the ambient light is occluded (the shader keeps the sun on it).
+function bakeContactAO(mb) {
+  const v = mb.v, S = VSTRIDE;
+  for (let i = 0; i < v.length; i += S) {
+    const z = v[i + 2];
+    if (z >= 9) continue;
+    const t = Math.max(0, z) / 9, s = t * t * (3 - 2 * t);
+    v[i + 15] *= 0.42 + 0.58 * s;
+  }
 }
 // Shape key: pieces with equal keys share meshes
 function pieceShapeKey(p) {

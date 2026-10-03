@@ -3,7 +3,7 @@
  *  UI: tray, inspector (with the piano keyboard), transport, demos gallery,
  *  music strip, save & share, first-run coach, toasts.
  * ========================================================================== */
-const UI = { showPath: store.get('marbleMusic.path') !== '0', oct: 4, inspFor: null, inspSig: '', stripOn: false, toastTimer: 0, metronome: false };
+const UI = { showPath: store.get('marbleMusic.path') !== '0', oct: 4, inspFor: null, inspSig: '', stripOn: false, toastTimer: 0, metronome: false, frameNo: 0 };
 const topbar = $('#topbar'), tray = $('#tray'), inspector = $('#inspector'), stripEl = $('#strip');
 const playBtn = $('#playBtn'), stopBtn = $('#stopBtn'), dropBtn = $('#dropBtn'), undoBtn = $('#undoBtn'), redoBtn = $('#redoBtn');
 const demosBtn = $('#demosBtn'), menuBtn = $('#menuBtn'), helpBtn = $('#helpBtn');
@@ -11,9 +11,19 @@ const coach = $('#coach'), demosDlg = $('#demos'), menuDlg = $('#menu');
 const srStatus = $('#srStatus');
 function say(text) { if (srStatus) srStatus.textContent = text; }
 
-// The screen area the board may use (CSS px), from the HUD. It does not depend on whether the inspector is open, so
-// selecting a piece never refits the camera (a piece hidden by the inspector is panned into view instead).
+// The screen area the board may use (CSS px), from the HUD (and, on a tower, the minimap's column at its left). It
+// does not depend on whether the inspector is open, so selecting a piece never refits the camera (a piece hidden by
+// the inspector is panned into view instead). Measured once a frame (SAFE.frame; relayout measures again).
+const SAFE = { frame: -1, r: null, base: null };
 function uiSafeRect() {
+  if (SAFE.frame === UI.frameNo && SAFE.r) return Object.assign({}, SAFE.r);
+  const b = hudRect(), m = minimapRect(b);
+  SAFE.base = b; SAFE.frame = UI.frameNo;
+  SAFE.r = m ? Object.assign({}, b, { l: m.l + m.w + 8 }) : b;
+  return Object.assign({}, SAFE.r);
+}
+function remeasureUI() { SAFE.frame = -1; SAFE.r = null; }
+function hudRect() {
   const w = window.innerWidth, h = window.innerHeight;
   const side = window.matchMedia('(orientation: landscape) and (max-height: 540px)').matches;
   const tb = topbar.getBoundingClientRect(), tr = tray.getBoundingClientRect();
@@ -24,6 +34,15 @@ function uiSafeRect() {
   if (strip && upright) r.b = (sr ? sr.top : tr.top - 80) - 6;          // phones: the strip sits above the tray
   else if (strip) r.t = (sr ? sr.bottom : tb.bottom + 8 + 80) + 6;
   return r;
+}
+// The minimap's place (CSS px: l, t, w, h), at the left of the HUD's free area, or null (not a tower). As tall as that
+// area allows and at most 48 px wide (30 on a phone), keeping the board's proportions.
+function minimapRect(b = SAFE.base || hudRect()) {
+  if (!tallBoard()) return null;
+  const B = FIT_BOX, a = (B.x1 - B.x0) / (B.y1 - B.y0), pad = 5, phone = window.innerWidth < 720 || window.innerHeight < 540;
+  const avail = Math.max(60, b.b - b.t - 2 * pad);
+  const w = Math.max(18, Math.min(phone ? 30 : 48, avail * a)), h = Math.min(avail, w / a);
+  return { l: b.l, t: b.t + pad, w: w + 2 * pad, h: h + 2 * pad, cw: w, ch: h, pad };
 }
 // Where the whole board is fitted: the safe area, except on a phone held upright, where the (width-limited) board
 // sits near the top and leaves the lower wall free
@@ -207,6 +226,110 @@ const pathBtn = $('#pathBtn');
 function setShowPath(on) { UI.showPath = on; pathBtn.setAttribute('aria-pressed', String(on)); store.set('marbleMusic.path', on ? '1' : '0'); }
 pathBtn.addEventListener('click', () => setShowPath(!UI.showPath));
 setShowPath(UI.showPath);
+// Cinematic (the demo strip): the view swings slowly round the run while it plays (off by default; remembered)
+const cineBtn = $('#cineBtn');
+function setCinematic(on) {
+  UI.cinematic = !!on;
+  cineBtn.setAttribute('aria-pressed', String(UI.cinematic));
+  store.set('marbleMusic.cinematic', UI.cinematic ? '1' : '0');
+}
+setCinematic(store.get('marbleMusic.cinematic') === '1');
+cineBtn.addEventListener('click', () => { setCinematic(!UI.cinematic); say(UI.cinematic ? 'Cinematic on: the view swings round the run while it plays.' : 'Cinematic off.'); });
+
+/* ---- The view compass (#viewCube): a small picture of the pegboard on its wall as the camera sees it (turned by
+ *  the same yaw and pitch), with the angle under it. Drag on it to orbit (2 axes), press it for the front view; arrow
+ *  keys turn it, Enter / Space put it back. Hidden in the 2D view (front-on: nothing to turn). Sits at the bottom
+ *  right of the free area (placeViewCube). ---- */
+const cubeEl = $('#viewCube'), cubeCv = $('#viewCubeCv');
+const CUBE = { sig: '', pos: '', drag: null };
+function placeViewCube() {
+  const b = SAFE.base || hudRect(), size = cubeEl.offsetWidth || 66;
+  let l = Math.round(b.r - size);
+  const t = Math.round(b.b - size);
+  if (!inspector.hidden) {                                        // a side-panel inspector reaching down to it: to its left
+    const ir = inspector.getBoundingClientRect();
+    if (ir.width < window.innerWidth * 0.7 && ir.bottom > t - 6 && ir.right > l - 6 && ir.left < l + size + 6) l = Math.round(ir.left - size - 8);
+  }
+  const key = l + ',' + t;
+  if (CUBE.pos === key) return;
+  CUBE.pos = key;
+  cubeEl.style.left = l + 'px'; cubeEl.style.top = t + 'px';
+}
+function refreshViewCube() { CUBE.sig = ''; }
+const CUBE_TXT = (yaw, pitch) => (Math.abs(yaw - CAMERA.yaw0) < 1.5 * RAD && Math.abs(pitch - CAMERA.pitch0) < 1.5 * RAD ? 'front' : Math.round(yaw / RAD) + '° ' + (pitch >= 0 ? '▾' : '▴') + Math.abs(Math.round(pitch / RAD)) + '°');
+// Each frame (cheap: drawn again only when the angle changes)
+function drawViewCube() {
+  if (!glOk) { if (!cubeEl.hidden) cubeEl.hidden = true; return; }
+  if (cubeEl.hidden) { cubeEl.hidden = false; CUBE.pos = ''; }
+  placeViewCube();
+  const yaw = GLR.cam.yaw || 0, pitch = GLR.cam.pitch || 0, w = cubeCv.clientWidth || 60, h = cubeCv.clientHeight || 60;
+  const sig = Math.round(yaw * 300) + '|' + Math.round(pitch * 300) + '|' + w + 'x' + h + '|' + BOARD_W + 'x' + BOARD_H;
+  if (sig === CUBE.sig) return;
+  CUBE.sig = sig;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (cubeCv.width !== Math.round(w * dpr) || cubeCv.height !== Math.round(h * dpr)) { cubeCv.width = Math.round(w * dpr); cubeCv.height = Math.round(h * dpr); }
+  const g = cubeCv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const R = Math.min(w, h - 11) / 2 - 1, cx = w / 2, cy = R + 1;
+  g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2);
+  g.fillStyle = 'rgba(255, 255, 255, 0.55)'; g.fill();
+  g.strokeStyle = 'rgba(80, 58, 36, 0.25)'; g.lineWidth = 1; g.stroke();
+  // the camera's basis (as 75-render's lookAt): screen x = p . X, screen y = p . Y, depth = p . Z
+  const sy = Math.sin(yaw), cyw = Math.cos(yaw), sp = Math.sin(pitch), cp = Math.cos(pitch);
+  const X = [cyw, 0, -sy], Y = [-sp * sy, cp, -sp * cyw], Z = [sy * cp, sp, cyw * cp], k = R * 0.72;
+  const P = (p) => { const d = p[0] * Z[0] + p[1] * Z[1] + p[2] * Z[2], s = k / (1 - d * 0.22); return [cx + (p[0] * X[0] + p[1] * X[1] + p[2] * X[2]) * s, cy - (p[0] * Y[0] + p[1] * Y[1] + p[2] * Y[2]) * s]; };
+  const quad = (pts, fill, stroke) => { g.beginPath(); pts.forEach((p, i) => { const q = P(p); if (i) g.lineTo(q[0], q[1]); else g.moveTo(q[0], q[1]); }); g.closePath(); g.fillStyle = fill; g.fill(); if (stroke) { g.strokeStyle = stroke; g.lineWidth = 1; g.stroke(); } };
+  g.save(); g.beginPath(); g.arc(cx, cy, R - 0.5, 0, Math.PI * 2); g.clip();
+  quad([[-1.6, 1.6, -0.14], [1.6, 1.6, -0.14], [1.6, -1.6, -0.14], [-1.6, -1.6, -0.14]], '#d9d3c6');                      // the wall
+  const tall = BOARD_H > BOARD_W * 1.3, bw = tall ? 0.34 : 0.62, bh = tall ? 0.72 : 0.62 * BOARD_H / BOARD_W, t = 0.08;
+  quad([[-bw, -bh, 0], [bw, -bh, 0], [bw, -bh, t], [-bw, -bh, t]], '#6e5236');                                            // its bottom edge
+  quad([[bw, bh, 0], [bw, -bh, 0], [bw, -bh, t], [bw, bh, t]], sy < 0 ? '#7a5b3c' : '#5c4430');                             // a side edge
+  quad([[-bw, bh, 0], [-bw, -bh, 0], [-bw, -bh, t], [-bw, bh, t]], sy > 0 ? '#7a5b3c' : '#5c4430');
+  quad([[-bw, bh, t], [bw, bh, t], [bw, -bh, t], [-bw, -bh, t]], '#a0784a', 'rgba(60, 40, 20, 0.6)');                     // the pegboard face
+  g.fillStyle = 'rgba(60, 40, 20, 0.45)';
+  for (let i = -1; i <= 1; i++) for (let j = -2; j <= 2; j++) { const q = P([i * bw * 0.55, j * bh * 0.38, t]); g.beginPath(); g.arc(q[0], q[1], 0.9, 0, Math.PI * 2); g.fill(); }
+  const m = P([0, bh * 0.35, t + 0.16]);                                                                                   // a marble off the board
+  g.beginPath(); g.arc(m[0], m[1], 2.6, 0, Math.PI * 2); g.fillStyle = '#4f9be8'; g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 1; g.stroke();
+  g.restore();
+  g.font = uiFont(800, 9.5); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#2b2118';
+  g.fillText(CUBE_TXT(yaw, pitch), cx, h - 5);
+  const now = CUBE_TXT(yaw, pitch);
+  if (CUBE.said !== now) {
+    CUBE.said = now;
+    cubeEl.setAttribute('aria-label', 'View angle: ' + (now === 'front' ? 'the front view' : 'turned ' + Math.round(yaw / RAD) + ' degrees, tilted ' + Math.round(pitch / RAD) + ' degrees') + '. Drag to turn the view round the board, press for the front view. Arrow keys turn it too.');
+  }
+}
+cubeEl.addEventListener('pointerdown', (e) => {
+  if (e.button !== undefined && e.button !== 0) return;
+  e.preventDefault();
+  try { cubeEl.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  stopOrbitMotion();
+  CUBE.drag = { id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, moved: false, raw: orbitRaw() };
+});
+cubeEl.addEventListener('pointermove', (e) => {
+  const d = CUBE.drag;
+  if (!d || e.pointerId !== d.id) return;
+  if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 3) return;
+  d.moved = true;
+  const g = 2.2 * RAD;                                            // (a small dial: 2.2° per px)
+  orbitBy(-(e.clientX - d.lx) * g, (e.clientY - d.ly) * g, d.raw);
+  d.lx = e.clientX; d.ly = e.clientY;
+});
+const cubeUp = (e) => {
+  const d = CUBE.drag;
+  if (!d || e.pointerId !== d.id) return;
+  CUBE.drag = null;
+  if (!d.moved && e.type === 'pointerup') { frontView(0.5); say('Front view'); }
+};
+cubeEl.addEventListener('pointerup', cubeUp);
+cubeEl.addEventListener('pointercancel', cubeUp);
+cubeEl.addEventListener('keydown', (e) => {
+  const s = (e.shiftKey ? 30 : 10) * RAD;
+  if (e.key.startsWith('Arrow')) { e.preventDefault(); e.stopPropagation(); orbitStep(e.key === 'ArrowLeft' ? s : e.key === 'ArrowRight' ? -s : 0, e.key === 'ArrowUp' ? s : e.key === 'ArrowDown' ? -s : 0); return; }
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); frontView(0.5); say('Front view'); return; }
+  if (e.key === 'Home') { e.preventDefault(); e.stopPropagation(); resetView(); say('The view is back at the start'); }
+});
 
 /* ============================================================================
  *  INSPECTOR: the selected piece. A two-octave piano keyboard sets (and plays) its note; sliders size it;
@@ -417,27 +540,61 @@ function openDemos() {
         el('button', { type: 'button', class: 'play', text: '▶ Play', 'aria-label': 'Play ' + def.title, onclick: () => { closeDialog(demosDlg); loadDemo(def.id, true); } }),
         el('button', { type: 'button', text: 'Remix', 'aria-label': 'Remix ' + def.title + ' in the builder', onclick: () => { closeDialog(demosDlg); loadDemo(def.id, false); remixDemo(); } }))));
     box.append(card);
+    UI.demoCards.set(def.id, cv);
     requestAnimationFrame(() => { const b = MarbleDemos.build(def.id); drawRoll(cv, b ? b.targets : [], null, null, b && demoClock(b)); });
   }
   openDialog(demosDlg, '.card .play');
 }
 demosBtn.addEventListener('click', () => openDemos());
+UI.demoCards = new Map();
 function loadDemo(id, andPlay) {
   perfQuiet();
   const b = MarbleDemos.build(id);
-  if (!b) { toast('That demo could not be built here.'); return false; }
+  if (!b) return demoNotReady(id, andPlay);
   stop();
   const kept = stashUserRun() || listRecent().length > 0;
   loadLayoutUndoable(b.layout, id);
   select(null);
-  fitView(true);
+  homeView();
   piano.prepare(layoutVoices());
   if (andPlay) { piano.init(); play(); }
   refreshTransport();
   if (kept) toast((andPlay ? 'Playing ' : 'Opened ') + b.title + '. Your run is safe.', 'Back to my run', backToMyRun, 6000);
   else hideToast();
+  if (!b.verified) toastMore('It may not play note-perfectly on this computer.', 7000);   // (the check failed and the solve could not do better)
   say('Loaded the demo ' + b.title);
   return true;
+}
+// A demo that is not ready: its baked tower failed CANON's check on this computer and it is being solved again in
+// the background (20-demos.js, 23-solver-worker.js: the page stays responsive; a progress note counts the seconds
+// and the demo opens by itself when it lands), or it could not be built at all (the other songs are offered)
+function demoNotReady(id, andPlay) {
+  const st = MarbleDemos.status(id), def = MarbleDemos.get(id), title = def ? def.title : 'That demo';
+  clearInterval(UI.solveTick);
+  if (st.state === 'solving') {
+    UI.wantDemo = { id, andPlay };
+    const text = () => { const s = Math.round((MarbleDemos.status(id).elapsed || 0) / 1000); return title + ' plays differently on this computer, so it is being solved again here… ' + s + ' s' + (s >= 8 ? ' (up to about half a minute)' : ''); };
+    toast(text(), 'Cancel', () => { UI.wantDemo = null; clearInterval(UI.solveTick); }, 1e9);
+    UI.solveTick = setInterval(() => {
+      if (MarbleDemos.status(id).state !== 'solving' || !UI.wantDemo || UI.wantDemo.id !== id) { clearInterval(UI.solveTick); return; }
+      const t = $('#toast span'); if (t) t.textContent = text();
+    }, 1000);
+    return false;
+  }
+  UI.wantDemo = null;
+  toast(title + ' could not be built on this computer. The other songs are in Demos.', 'Demos', openDemos, 8000);
+  return false;
+}
+// A background solve finished (MarbleDemos calls this): open the demo the user is waiting for; redraw its card
+function onDemoStatus(id, state, out) {
+  const w = UI.wantDemo;
+  if (w && w.id === id) {
+    UI.wantDemo = null; clearInterval(UI.solveTick);
+    if (state === 'ready') { hideToast(); loadDemo(id, w.andPlay); toastMore(out.verified ? 'Solved!' : 'Solved, though not note-perfect here.'); }
+    else demoNotReady(id, w.andPlay);
+  }
+  const cv = UI.demoCards.get(id);
+  if (cv && !demosDlg.hidden) drawRoll(cv, out ? out.targets : [], null, null, out && demoClock(out));
 }
 // Open the newest of your recent runs again (after a demo or a link replaced it). The run on the board goes to
 // Recent first (a remix such as "My Ode to Joy" is yours too), so pressing it again swaps back.
@@ -464,7 +621,7 @@ function remixDemo() {
   if (!MODEL.demoId) return;
   change(() => adoptDemo(false));
   relayout();
-  frameRun();
+  if (!tallBoard()) frameRun();                          // (a tower stays where you are looking)
   toast('It\'s your run now: move, retune and add pieces!');
 }
 $('#remixBtn').addEventListener('click', () => { stop(); remixDemo(); refreshTransport(); });
@@ -547,8 +704,9 @@ const STRIP_TOL = 0.015;
 function refreshStrip() {
   const id = stripDemo(), b = id ? MarbleDemos.cached(id) : null;
   const on = !!b;
-  if (stripEl.hidden === on) { stripEl.hidden = !on; document.body.classList.toggle('has-strip', on); }
+  if (stripEl.hidden === on) { stripEl.hidden = !on; document.body.classList.toggle('has-strip', on); remeasureUI(); }
   if (!on) { STRIP.id = null; return; }
+  if (cineBtn.hidden !== !glOk) cineBtn.hidden = !glOk;          // (the 2D view is front-on: nothing to swing)
   const remix = !MODEL.demoId, key = id + '|' + remix + '|' + MODEL.name;
   if (STRIP.key !== key) {
     STRIP.key = key; STRIP.id = id; STRIP.played.clear(); STRIP.lastLen = 0; STRIP.count = '';
@@ -586,6 +744,209 @@ function refreshStrip() {
 onSimChange((k) => { if (k === 'play') { STRIP.played.clear(); STRIP.lastLen = 0; } });
 
 /* ============================================================================
+ *  MINIMAP (towers) and the FOLLOW button
+ *  A slim picture of the whole tower at the left of the board: the board, every piece in its note's colour (silent
+ *  ones grey), the predicted path, where the view is (a bright frame) and where the marbles are (glowing dots).
+ *  Press or drag on it to go there (a press on the marble, once the camera has let go of it, follows it again). It is a
+ *  vertical slider for the keyboard too (arrow keys, Page Up / Down, Home / End). The Follow button appears beside
+ *  it when the camera has stopped following a playing run because you scrolled away.
+ * ========================================================================== */
+const miniEl = $('#minimap'), miniCv = $('#miniCanvas'), followBtn = $('#followBtn');
+const MINI = { k: 1, rect: null, key: '', layer: null, dyn: '', drag: false };
+// Board point <-> minimap canvas point (CSS px)
+const miniX = (x) => (x - FIT_BOX.x0) * MINI.k, miniY = (y) => (y - FIT_BOX.y0) * MINI.k;
+function placeMinimap() {
+  const m = minimapRect(SAFE.base || hudRect());
+  const on = !!m;
+  if (miniEl.hidden === on) miniEl.hidden = !on;
+  if (!on) { MINI.rect = null; followBtn.hidden = true; return; }
+  const key = [m.l, m.t, m.w, m.h].map(Math.round).join(',');
+  if (MINI.rect && MINI.rect.key === key) return;
+  MINI.rect = Object.assign({ key }, m);
+  Object.assign(miniEl.style, { left: m.l + 'px', top: m.t + 'px', width: m.w + 'px', height: m.h + 'px', padding: m.pad + 'px' });
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  miniCv.width = Math.round(m.cw * dpr); miniCv.height = Math.round(m.ch * dpr);
+  MINI.k = m.cw / (FIT_BOX.x1 - FIT_BOX.x0); MINI.key = ''; MINI.dyn = '';
+  Object.assign(followBtn.style, { left: (m.l + m.w + 8) + 'px', top: (m.t + Math.max(0, m.h - 44)) + 'px' });
+}
+// The still picture (board, pieces, path), redrawn when the run or the preview changes
+function miniLayer() {
+  const paths = UI.showPath ? PREVIEW.paths : null, key = MODEL.version + '|' + miniCv.width + 'x' + miniCv.height + '|' + (paths ? PREVIEW.gen : '');
+  if (MINI.key === key && MINI.layer) return MINI.layer;
+  MINI.key = key;
+  const c = MINI.layer || (MINI.layer = document.createElement('canvas'));
+  c.width = miniCv.width; c.height = miniCv.height;
+  const g = c.getContext('2d'), dpr = miniCv.width / MINI.rect.cw, k = MINI.k;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = '#cfae7c'; g.fillRect(0, 0, MINI.rect.cw, MINI.rect.ch);                           // the pine frame
+  g.fillStyle = '#8d6a45'; g.fillRect(miniX(-BOARD_PAD), miniY(-BOARD_PAD), (BOARD_W + 2 * BOARD_PAD) * k, (BOARD_H + 2 * BOARD_PAD) * k);
+  g.fillStyle = '#b9bec5'; g.fillRect(miniX(TROUGH.x0), miniY(TROUGH.y0), (TROUGH.x1 - TROUGH.x0) * k, Math.max(1.5, (TROUGH.y1 - TROUGH.y0) * k));
+  if (paths) {                                                                                     // the way down
+    g.strokeStyle = 'rgba(255, 255, 255, 0.45)'; g.lineWidth = 1; g.lineJoin = 'round';
+    paths.forEach((pr) => {
+      const P = pr.path;
+      if (P.length < 2) return;
+      g.beginPath(); g.moveTo(miniX(P[0][0]), miniY(P[0][1]));
+      for (let i = 4; i < P.length; i += 4) g.lineTo(miniX(P[i][0]), miniY(P[i][1]));
+      g.stroke();
+    });
+  }
+  g.lineCap = 'round';
+  const lw = Math.max(1.4, 10 * k);
+  for (const p of MODEL.pieces) {
+    const col = p.type === 'dropper' ? '#e8b64c' : p.type === 'bucket' ? '#d9dde2' : p.note ? noteHex(p.note) : '#e4e7eb';
+    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = lw;
+    if (p.type === 'dropper') { g.fillRect(miniX(p.x) - 2, miniY(p.y - 100), 4, Math.max(3, 100 * k)); continue; }
+    if (p.type === 'bell') { g.beginPath(); g.arc(miniX(p.x), miniY(p.y), Math.max(1.4, p.r * k), 0, Math.PI * 2); g.fill(); continue; }
+    g.beginPath();
+    for (const cl of CANON.colliders(p)) { if (cl.shape === 'seg') { g.moveTo(miniX(cl.ax), miniY(cl.ay)); g.lineTo(miniX(cl.bx), miniY(cl.by)); } }
+    g.stroke();
+  }
+  return c;
+}
+// Each frame (cheap: the still picture is cached): the view's frame, the marbles and the pieces that just played
+function drawMinimap() {
+  placeMinimap();
+  if (!MINI.rect) return;
+  const marbles = drawnMarbles();
+  const dyn = MINI.key + '|' + VIEWCAM.version + '|' + (marbles.length ? SIM.dispT : '') + '|' + SIM.fx.size;
+  const layer = miniLayer();
+  if (dyn === MINI.dyn && MINI.key === MINI.drawnKey) return;
+  MINI.dyn = dyn; MINI.drawnKey = MINI.key;
+  const g = miniCv.getContext('2d'), dpr = miniCv.width / MINI.rect.cw, W = MINI.rect.cw, H = MINI.rect.ch;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.drawImage(layer, 0, 0);
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  for (const [id, f] of SIM.fx) {                                          // pieces ringing now
+    if (!(f.glow > 0.05)) continue;
+    const p = pieceById(id);
+    if (!p) continue;
+    g.globalAlpha = Math.min(1, f.glow); g.fillStyle = p.note ? mixHex(noteHex(p.note), '#ffffff', 0.4) : '#fff';
+    g.beginPath(); g.arc(miniX(p.x), miniY(p.y), 3.2, 0, Math.PI * 2); g.fill();
+  }
+  g.globalAlpha = 1;
+  // the view: a bright frame round the part of the tower on screen: the free area's corners cast through the camera
+  // onto the marble plane (a trapezium from an angle; a corner whose ray lands far off or misses the board is kept
+  // within three front-on spans of the target)
+  const sr = uiSafeRect(), c = viewCentre(), [sw, sh] = viewSpan();
+  const Q = [[sr.l, sr.t], [sr.r, sr.t], [sr.r, sr.b], [sr.l, sr.b]].map(([px, py]) => {
+    const b = VIEW.s2b(px, py);
+    return [clamp(miniX(clamp(b[0], c[0] - 3 * sw, c[0] + 3 * sw)), 0.75, W - 0.75), clamp(miniY(clamp(b[1], c[1] - 3 * sh, c[1] + 3 * sh)), 0.75, H - 0.75)];
+  });
+  g.beginPath(); for (let i = 0; i < 4; i++) { if (i) g.lineTo(Q[i][0], Q[i][1]); else g.moveTo(Q[i][0], Q[i][1]); } g.closePath();
+  g.fillStyle = 'rgba(255, 255, 255, 0.18)'; g.fill();
+  g.lineJoin = 'round';
+  g.strokeStyle = 'rgba(20, 14, 8, 0.6)'; g.lineWidth = 3; g.stroke();
+  g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke();
+  // the marbles
+  for (const m of marbles) {
+    const q = marbleDrawPos(m, DRAWPOS);
+    if (!q) continue;
+    const x = miniX(q[0]), y = miniY(q[1]);
+    const gr = g.createRadialGradient(x, y, 0, x, y, 7);
+    gr.addColorStop(0, 'rgba(255, 246, 200, 0.95)'); gr.addColorStop(1, 'rgba(255, 220, 120, 0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, 7, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#4f9be8'; g.strokeStyle = '#fff'; g.lineWidth = 1.2;
+    g.beginPath(); g.arc(x, y, 2.6, 0, Math.PI * 2); g.fill(); g.stroke();
+  }
+  // (for assistive tech: how far down the tower the view is)
+  const pct = Math.round(clamp((c[1] - FIT_BOX.y0) / (FIT_BOX.y1 - FIT_BOX.y0), 0, 1) * 100);
+  if (miniEl.getAttribute('aria-valuenow') !== String(pct)) { miniEl.setAttribute('aria-valuenow', String(pct)); miniEl.setAttribute('aria-valuetext', pct + '% of the way down the tower'); }
+}
+// Press / drag: go there. A press on a marble (while the camera has let go of it) follows it again.
+function miniBoardPoint(e) {
+  const r = miniCv.getBoundingClientRect();
+  return [FIT_BOX.x0 + (e.clientX - r.left) / MINI.k, FIT_BOX.y0 + (e.clientY - r.top) / MINI.k];
+}
+function miniGo(e, glide) {
+  const [x, y] = miniBoardPoint(e), [sw] = viewSpan(), B = FIT_BOX;
+  const cx = B.x1 - B.x0 <= sw * 1.02 ? (B.x0 + B.x1) / 2 : x;
+  pauseFollow(); setViewMode('free'); stopFling(); SCROLLQ.x = SCROLLQ.y = 0;
+  if (glide) glideTo(cx, y, Math.max(VIEWCAM.zoom, homeZoom() * 0.999), 0.3); else { VIEWCAM.glide = null; setViewCentre(cx, y); }
+}
+miniEl.addEventListener('pointerdown', (e) => {
+  if (e.button !== undefined && e.button !== 0) return;
+  e.preventDefault();
+  try { miniEl.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  if (TFOLLOW.active && TFOLLOW.paused) {                       // on the marble: follow it again
+    const [x, y] = miniBoardPoint(e), lead = leadMarble();
+    if (lead && Math.hypot(lead.x - x, lead.y - y) * MINI.k < 12) { resumeFollow(); return; }
+  }
+  MINI.drag = true;
+  miniGo(e, true);
+});
+miniEl.addEventListener('pointermove', (e) => { if (MINI.drag) miniGo(e, false); });
+const miniUp = () => { MINI.drag = false; };
+miniEl.addEventListener('pointerup', miniUp);
+miniEl.addEventListener('pointercancel', miniUp);
+miniEl.addEventListener('wheel', (e) => { e.preventDefault(); scrollView(0, e.deltaY * (e.deltaMode === 1 ? 32 : 1)); }, { passive: false });
+miniEl.addEventListener('keydown', (e) => {
+  const [, sh] = viewSpan(), ppu = VIEW.ppu(), c = viewCentre();
+  const step = { ArrowDown: 0.15, ArrowUp: -0.15, PageDown: 0.85, PageUp: -0.85 }[e.key];
+  if (step) { e.preventDefault(); e.stopPropagation(); scrollView(0, step * sh * ppu); return; }
+  if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); e.stopPropagation(); pauseFollow(); glideTo(c[0], e.key === 'Home' ? FIT_BOX.y0 + sh / 2 : FIT_BOX.y1 - sh / 2, VIEWCAM.zoom, 0.6); }
+});
+// Shown while a tower's run plays and the camera has let go of the marble
+function refreshFollowBtn() {
+  const show = !!MINI.rect && TFOLLOW.active && TFOLLOW.paused;
+  if (followBtn.hidden === !show) return;
+  followBtn.hidden = !show;
+  if (show) say('The camera stopped following the marble. Press Follow to follow it again.');
+}
+followBtn.addEventListener('click', () => { resumeFollow(); stageEl().focus({ preventScroll: true }); });
+// The first tower you see says once how to get about it (remembered: 'marbleMusic.towerHint')
+function towerHint() {
+  if (!tallBoard() || store.get('marbleMusic.towerHint') || !coach.hidden) return;
+  store.set('marbleMusic.towerHint', '1');
+  let tries = 0;
+  const show = () => {                                        // (after any toast already showing: never over a notice)
+    if ($('#toast').classList.contains('show') && tries++ < 4) { setTimeout(show, 2500); return; }
+    if (!tallBoard()) return;
+    toast((touchUI ? 'A tower! Two fingers slide it up and down, one finger turns it round' : 'A tower! Scroll to go up and down, drag to turn it round') +
+      ' (the map on the left shows all of it). Play follows the marble.', null, null, 6500);
+  };
+  setTimeout(show, 900);
+}
+
+/* ---- Board size (Save & share > Board): Wide, Tower or Tall tower. No piece is ever lost (resizeBoard): the run
+ *  stays centred, a board too small for it grows to hold it, and Undo puts the old board back. ---- */
+const boardSeg = $('#boardSeg');
+// A small picture of the board's shape with a zig-zag of bars on it (a Wide board, a Tower, a Tall tower)
+const BOARD_ICON = { wide: [28, 17, 2], tower: [14, 26, 3], tall: [11, 31, 4] };
+function boardIcon(S) {
+  const [w, h, n] = BOARD_ICON[S.id] || [20, 20, 2], x0 = 16 - w / 2, y0 = 16 - h / 2, cols = ['#e5392f', '#f0d02a', '#2a8fcf', '#5fb944'];
+  let bars = '';
+  for (let i = 0; i < n; i++) {
+    const y = y0 + h * (i + 0.7) / (n + 0.4), l = x0 + w * 0.18, r = x0 + w * 0.82, d = Math.min(3, h / (n * 3));
+    bars += '<path d="M' + l.toFixed(1) + ' ' + (y - (i % 2 ? -d : d)).toFixed(1) + 'L' + r.toFixed(1) + ' ' + (y + (i % 2 ? -d : d)).toFixed(1) + '" stroke="' + cols[i % 4] + '" stroke-width="1.8" stroke-linecap="round"/>';
+  }
+  return el('span', { class: 'bicon', 'aria-hidden': 'true', html: '<svg viewBox="0 0 32 32"><rect x="' + x0 + '" y="' + y0 + '" width="' + w + '" height="' + h + '" rx="1.5" fill="#8d6a45" stroke="#cfae7c" stroke-width="1.6"/>' + bars + '</svg>' });
+}
+function renderBoardChoice() {
+  boardSeg.textContent = '';
+  const cur = boardSizeOf();
+  for (const S of BOARD_SIZES) {
+    const b = el('button', { type: 'button', 'aria-pressed': String(cur === S), title: S.name + ' board: ' + S.w + ' × ' + S.h },
+      boardIcon(S), el('span', {}, S.name, el('small', { text: S.w + ' × ' + S.h })));
+    b.addEventListener('click', () => chooseBoard(S));
+    boardSeg.append(b);
+  }
+  $('#boardNow').textContent = cur ? '' : 'This board is ' + Math.round(BOARD_W) + ' × ' + Math.round(BOARD_H) + '.';
+}
+function chooseBoard(S) {
+  if (BOARD_W === S.w && BOARD_H === S.h) { closeDialog(menuDlg); return; }
+  stop();
+  const r = resizeBoard(S.w, S.h);
+  closeDialog(menuDlg);
+  homeView();                                               // (the new board as it now is: Wide whole, a tower from the top)
+  refreshTransport();
+  let msg = 'Board: ' + S.name + ' (' + r.w + ' × ' + r.h + ').';
+  if (r.grew) msg = 'Board: ' + r.w + ' × ' + r.h + ', just big enough to keep every piece.';
+  else if (r.dx) msg += ' Your run moved with it.';
+  toast(msg, 'Undo', () => undo(), 7000);
+}
+
+/* ============================================================================
  *  SAVE & SHARE
  * ========================================================================== */
 const scaleSel = $('#scaleSel');
@@ -597,6 +958,7 @@ function openMenu() {
   $('#shareOut').hidden = true;
   UI.slotAsk = null;
   renderSlots();
+  renderBoardChoice();
   $('#twoDBtn').hidden = !glOk;
   openDialog(menuDlg, touchUI ? '[data-close]' : '#nameInput');
 }
@@ -702,7 +1064,7 @@ $('#importFile').addEventListener('change', (e) => {
 });
 $('#clearBtn').addEventListener('click', () => {
   if (!MODEL.pieces.length) return;
-  stop(); stashUserRun(); clearBoard(); select(null); closeDialog(menuDlg); fitView();
+  stop(); stashUserRun(); clearBoard(); select(null); closeDialog(menuDlg); homeView();
   toast('Board cleared.', 'Undo', () => undo(), 6000);
 });
 // The autosave could not be written (full or blocked storage): say so once
@@ -719,6 +1081,7 @@ $('#twoDBtn').addEventListener('click', () => { closeDialog(menuDlg); fallbackTo
 function openHelp() { openDialog(coach, '#coachGo'); }
 function closeHelp() {
   store.set('marbleMusic.helpSeen', '1'); closeDialog(coach);
+  towerHint();
   if (!reducedMotion) playBtn.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.14)' }, { transform: 'scale(1)' }], { duration: 520, delay: 250 });   // "now press Play"
 }
 $('#coachGo').addEventListener('click', () => { piano.init(); closeHelp(); });

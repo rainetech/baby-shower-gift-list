@@ -41,7 +41,7 @@ function noteVelocity(impact) {
   return impact < 120 ? 0.35 + 0.27 * impact / 120 : 0.62 + 0.33 * Math.sqrt(clamp((impact - 150) / 650, 0, 1));
 }
 const PIECE_METAL = { bar: 0.6, bell: 0.9, spring: 0.5, wall: 0.4, funnel: 0.4, rail: 0.3, curve: 0.3 };
-const piecePan = (p) => 0.6 * (2 * clamp(p.x, 0, BOARD_W) / BOARD_W - 1);
+const piecePan = (p) => 0.6 * (2 * clamp(p.x, 0, BOARD_W) / BOARD_W - 1);   // (across the board, whatever its width)
 // Every voice this layout can play ({ freq, metal }), for the synth to have ready
 function layoutVoices(pieces = MODEL.pieces) {
   const out = [], seen = new Set();
@@ -287,27 +287,107 @@ function simulateSeconds(seconds) {
   setDisplayTime(clockNow());
 }
 
+/* ---- Long predictions (towers): CANON.predict with checkpoints ----
+ *  A tower's marble can run for a minute or two, so a prediction keeps a copy of its marble every half second.
+ *  After an edit, a path is run again only from the last checkpoint before the marble first comes within reach of a
+ *  changed piece (as it was, or as it is): until then nothing can differ (a marble that never comes within touching
+ *  distance of a piece cannot tell whether it is there, and CANON keeps the other colliders in the same order), so
+ *  the result is bit-identical to a fresh CANON.predict of the edited layout (tools/tower-test.js checks this).
+ *  Same result shape as CANON.predict: { path: [[x, y, t]...] every 1/60 s, hits, end }, plus cps (checkpoints). */
+const CP_STEPS = 120;                             // steps between checkpoints (0.5 s: a multiple of the 4-step sampling)
+const PATH_EVERY = 4;                             // steps between path samples (1/60 s, as CANON.predict(.., 1/60))
+const cloneMarble = (m) => Object.assign({}, m, { contactT: new Map(m.contactT), noteT: new Map(m.noteT) });
+// How long a preview runs: 8 s on a Wide board (as ever); a tower's marble has a long way down
+function previewSeconds() { return tallBoard() ? clamp(Math.round(BOARD_H / 40), 20, 240) : 8; }
+// Predict dropper `dropperId`'s marble for `seconds`; `from` = { pr, c } resumes prediction pr at its checkpoint c;
+// `limit` stops it that many seconds after where it starts (a live drag: see previewPaths), marking the result `cut`
+function predictRun(layout, dropperId, seconds, from, limit) {
+  const w = CANON.createWorld(layout), steps = Math.round(seconds / H_STEP);
+  let m, path, hits, cps, i0;
+  if (from) {
+    const cp = from.pr.cps[from.c];
+    m = cloneMarble(cp.m);
+    w.marbles.push(m); w.time = cp.t; w.nextMarbleId = m.id + 1;
+    path = from.pr.path.slice(0, cp.n); hits = from.pr.hits.slice(0, cp.h); cps = from.pr.cps.slice(0, from.c + 1);
+    i0 = cp.step;
+  } else {
+    m = CANON.dropFrom(w, dropperId);
+    if (!m) return { path: [], hits: [], end: null, cps: [], seconds };
+    path = [[m.x, m.y, 0]]; hits = []; cps = [{ step: 0, t: 0, m: cloneMarble(m), n: 1, h: 0 }]; i0 = 0;
+  }
+  const last = limit ? Math.min(steps, i0 + Math.round(limit / H_STEP)) : steps;
+  for (let i = i0 + 1; i <= last && w.marbles.length; i++) {
+    CANON.step(w);
+    if (w.notes.length) { for (const n of w.notes) hits.push({ t: n.t, note: n.note, pieceId: n.pieceId, x: n.x, y: n.y }); w.notes.length = 0; }
+    if (i % PATH_EVERY === 0 && w.marbles.length) {
+      path.push([m.x, m.y, w.time]);
+      if (i % CP_STEPS === 0) cps.push({ step: i, t: w.time, m: cloneMarble(m), n: path.length, h: hits.length });
+    }
+  }
+  return { path, hits, end: w.removed[0] || null, cps, seconds, cut: last < steps && w.marbles.length > 0 };
+}
+// The first path sample from which the marble could touch one of `shapes` (previewShapes), or -1
+function firstNear(path, shapes) {
+  let first = -1;
+  for (let si = 0; si < shapes.length; si++) {
+    const c = shapes[si];
+    const r = c.hw + PREVIEW_REACH, x0 = Math.min(c.ax, c.ax + c.abx) - r, x1 = Math.max(c.ax, c.ax + c.abx) + r;
+    const y0 = Math.min(c.ay, c.ay + c.aby) - r, y1 = Math.max(c.ay, c.ay + c.aby) + r;
+    for (let i = 0, e = first < 0 ? path.length : first; i < e; i++) {
+      const q = path[i];
+      if (q[0] < x0 || q[0] > x1 || q[1] < y0 || q[1] > y1) continue;
+      let t = ((q[0] - c.ax) * c.abx + (q[1] - c.ay) * c.aby) / c.len2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const dx = q[0] - c.ax - c.abx * t, dy = q[1] - c.ay - c.aby * t;
+      if (dx * dx + dy * dy < r * r) { first = i; break; }
+    }
+  }
+  return first;
+}
+// Predict on `layout`, reusing `base` (a prediction of the same dropper on a layout that differs only by the
+// `changed` pieces, listed as they were and as they are) as far as it cannot differ. A base that was cut short (or
+// ran for less time) is carried on from its last checkpoint.
+function predictReusing(layout, dropperId, seconds, base, changed, limit) {
+  if (!base || !base.cps || !base.cps.length) return predictRun(layout, dropperId, seconds, null, limit);
+  const k = firstNear(base.path, previewShapes(changed.filter((p) => p && p.type !== 'dropper')));
+  if (k < 0 && !base.cut && base.seconds === seconds) return base;     // never nears them: exactly the same run
+  const lim = k < 0 ? Infinity : k - 1;                                 // (the checkpoint's sample must be before sample k)
+  let c = -1;
+  for (let i = base.cps.length - 1; i >= 0; i--) if (base.cps[i].n - 1 <= lim && base.cps[i].step <= Math.round(seconds / H_STEP)) { c = i; break; }
+  return c > 0 ? predictRun(layout, dropperId, seconds, { pr: base, c }, limit) : predictRun(layout, dropperId, seconds, null, limit);
+}
+
 // Path preview: one marble from each dropper, run ahead with CANON, cached per layout version. After a small edit
-// only the droppers whose path comes within reach of a changed piece (its old or new place) are run again: a marble
-// that never comes within touching distance of a piece cannot tell whether it is there, so every other path is
-// exactly the same. (Path samples are 1/60 s apart, so "within reach" allows for a marble's travel in between.)
-const PREVIEW = { key: '', paths: new Map(), sig: new Map() };
+// only the droppers whose path comes within reach of a changed piece (its old or new place) are run again, and only
+// from their last checkpoint before it (see predictRun): a marble that never comes within touching distance of a
+// piece cannot tell whether it is there, so every other path (and every path up to there) is exactly the same.
+// (Path samples are 1/60 s apart, so "within reach" allows for a marble's travel in between.)
+// While a piece is being dragged or resized (live), a path is run on for at most LIVE_SPAN s past where it had to
+// start again (a piece near the top of a long tower would otherwise mean re-running minutes of marble on every move);
+// the rest follows as soon as the edit ends (the cut path is carried on from its last checkpoint).
+const PREVIEW = { key: '', paths: new Map(), sig: new Map(), board: '', gen: 0, cut: false };   // (gen: bumped by every new preview)
 const PREVIEW_REACH = CANON.MARBLE_R + 2 + CANON.MAX_SPEED / 60;
-function previewPaths(pieces, key, seconds = 8) {
-  if (key === PREVIEW.key) return PREVIEW.paths;
-  const L = simLayout(pieces), out = new Map(), sig = new Map();
+const LIVE_SPAN = 10;
+const liveEdit = () => !!(HISTORY.pending || EDIT.ghost);
+// Is the cached preview the one for `key` (and whole, unless an edit is still live)?
+const previewCurrent = (key, live = liveEdit()) => key === PREVIEW.key && (live || !PREVIEW.cut);
+function previewPaths(pieces, key, seconds = previewSeconds(), live = liveEdit()) {
+  if (previewCurrent(key, live)) return PREVIEW.paths;
+  const L = simLayout(pieces), out = new Map(), sig = new Map(), board = BOARD_W + 'x' + BOARD_H + '|' + seconds;
   for (const p of pieces) sig.set(p.id, JSON.stringify(p));
   const changed = [];                               // other pieces added, removed or changed, as they were and are
   sig.forEach((s, id) => { if (PREVIEW.sig.get(id) !== s) { changed.push(s); if (PREVIEW.sig.has(id)) changed.push(PREVIEW.sig.get(id)); } });
   PREVIEW.sig.forEach((s, id) => { if (!sig.has(id)) changed.push(s); });
-  const shapes = changed.length <= 16 ? previewShapes(changed.map((s) => JSON.parse(s)).filter((p) => p.type !== 'dropper')) : null;
+  const reuse = board === PREVIEW.board && changed.length <= 16, changedPieces = reuse ? changed.map((s) => JSON.parse(s)) : null;
   for (const p of pieces) {
     if (p.type !== 'dropper') continue;
     const old = PREVIEW.paths.get(p.id);
-    const keep = shapes && old && PREVIEW.sig.get(p.id) === sig.get(p.id) && !pathNear(old.path, shapes);
-    out.set(p.id, keep ? old : CANON.predict(L, p.id, seconds, 1 / 60));
+    const lim = live ? LIVE_SPAN : 0;
+    out.set(p.id, reuse && old && PREVIEW.sig.get(p.id) === sig.get(p.id) ? predictReusing(L, p.id, seconds, old, changedPieces, lim) : predictRun(L, p.id, seconds, null, lim));
   }
-  PREVIEW.key = key; PREVIEW.paths = out; PREVIEW.sig = sig;
+  PREVIEW.key = key; PREVIEW.paths = out; PREVIEW.sig = sig; PREVIEW.board = board; PREVIEW.gen++;
+  PREVIEW.cut = false;
+  out.forEach((pr) => { if (pr.cut) PREVIEW.cut = true; });
   return out;
 }
 // What a marble can feel of these pieces: their colliders, and for a bucket the pocket where it catches marbles
@@ -318,20 +398,4 @@ function previewShapes(list) {
     if (p.type === 'bucket') out.push({ ax: p.x, ay: p.y, abx: 0, aby: 0, len2: 1, hw: 50 });
   }
   return out;
-}
-function pathNear(path, shapes) {
-  for (let si = 0; si < shapes.length; si++) {
-    const c = shapes[si];
-    const r = c.hw + PREVIEW_REACH, x0 = Math.min(c.ax, c.ax + c.abx) - r, x1 = Math.max(c.ax, c.ax + c.abx) + r;
-    const y0 = Math.min(c.ay, c.ay + c.aby) - r, y1 = Math.max(c.ay, c.ay + c.aby) + r;
-    for (let i = 0; i < path.length; i++) {
-      const q = path[i];
-      if (q[0] < x0 || q[0] > x1 || q[1] < y0 || q[1] > y1) continue;
-      let t = ((q[0] - c.ax) * c.abx + (q[1] - c.ay) * c.aby) / c.len2;
-      t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const dx = q[0] - c.ax - c.abx * t, dy = q[1] - c.ay - c.aby * t;
-      if (dx * dx + dy * dy < r * r) return true;
-    }
-  }
-  return false;
 }

@@ -119,8 +119,38 @@
   #strip .t { font-size: 13px; font-weight: 900; line-height: 1.12; width: 132px; flex: none; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
   #strip .t small { display: block; font-weight: 700; color: var(--ink-soft); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #strip canvas { flex: 1; height: 66px; min-width: 0; border-radius: 8px; background: #221a13; }
-  #strip .btns { display: flex; flex-direction: column; gap: 4px; }
-  #strip .btns button { min-height: 32px; font-size: 12.5px; padding: 3px 9px; }
+  #strip .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  #strip .btns button { min-height: 32px; font-size: 12.5px; padding: 3px 9px; min-width: 0; }
+  #strip .btns #cineBtn { grid-column: 1 / -1; }
+  #strip .btns button[hidden] { display: none; }
+  #cineBtn[aria-pressed="true"] { background: #fff1c9; box-shadow: 0 0 0 2px var(--sel) inset; }
+
+  /* ---- The view compass: a small picture of the board from the camera's angle; drag it to turn the view, press it for
+   *  the front view (placed by placeViewCube at the bottom right of the free area) ---- */
+  #viewCube { position: fixed; z-index: 3; left: 0; top: 0; width: 66px; height: 66px; padding: 3px; border-radius: 14px; touch-action: none; cursor: grab; }
+  #viewCube[hidden] { display: none; }
+  #viewCube:active { cursor: grabbing; }
+  #viewCube:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  #viewCube canvas { display: block; width: 100%; height: 100%; }
+
+  /* ---- Towers: the minimap at the left of the board, and the Follow button beside it ---- */
+  #minimap { position: fixed; z-index: 3; left: 10px; top: 80px; width: 58px; height: 200px; padding: 5px; border-radius: 12px; touch-action: none; cursor: pointer; }
+  #minimap[hidden] { display: none; }
+  #minimap:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  #minimap canvas { display: block; width: 100%; height: 100%; border-radius: 6px; }
+  #followBtn { position: fixed; z-index: 4; left: 76px; top: 240px; min-height: 36px; padding: 5px 13px 5px 9px; border-radius: 999px; font-size: 14px;
+    background: linear-gradient(#45d07f, var(--go)); color: #fff; border-color: var(--go-dk); text-shadow: 0 1px 0 rgba(0,0,0,.18);
+    box-shadow: 0 0 0 3px rgba(47, 180, 99, 0.3), var(--shadow); }
+  #followBtn[hidden] { display: none; }
+  #followBtn svg { width: 18px; height: 18px; }
+  @media (max-width: 719px), (max-height: 540px) { #minimap { padding: 4px; border-radius: 10px; } #followBtn { font-size: 13px; min-height: 34px; padding: 4px 11px 4px 7px; } }
+  .boardseg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 4px 0 6px; }
+  .boardseg button { flex-direction: column; gap: 2px; min-height: 64px; padding: 6px 4px; font-size: 13.5px; line-height: 1.1; white-space: normal; }
+  .boardseg .bicon, .boardseg .bicon svg { display: block; width: 34px; height: 34px; }
+  .boardseg button small { display: block; font-size: 11px; font-weight: 700; color: var(--ink-soft); }
+  .boardseg button[aria-pressed="true"] { background: #fff1c9; box-shadow: 0 0 0 2px var(--sel) inset; }
+  .boardnow { margin: 0 0 4px; font-size: 12.5px; font-weight: 700; color: var(--ink-soft); }
+  .boardnow:empty { display: none; }
 
   /* ---- Dialogs: demos gallery, menu, coach ---- */
   .scrim { position: fixed; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center; padding: 16px;
@@ -238,14 +268,16 @@
     #inspector.compact .ins-head canvas { width: 34px; height: 28px; }
     #inspector.compact .ins-head h2 { font-size: 15px; }
     #inspector.compact .piano { height: 60px; }
-    body.ins-open #strip { visibility: hidden; }
+    body.ins-open #strip, body.ins-open #viewCube { visibility: hidden; }
     body.ins-open #toast { top: calc(max(8px, env(safe-area-inset-top)) + var(--top-h) + 10px); bottom: auto; }
     #strip { top: auto; bottom: calc(max(8px, env(safe-area-inset-bottom)) + var(--tray-h) + 18px); height: 70px; gap: 6px; padding: 5px 6px; }
     #strip .t { width: 70px; font-size: 11.5px; -webkit-line-clamp: 3; }
     #strip .t small { font-size: 10px; white-space: normal; }
     #strip .t small.demo-sub { display: none; }
     #strip canvas { height: 58px; }
-    #strip .btns button { min-height: 28px; min-width: 0; padding: 2px 7px; font-size: 11.5px; }
+    #strip .btns { gap: 3px; }
+    #strip .btns button { min-height: 27px; min-width: 0; padding: 2px 6px; font-size: 11px; }
+    #viewCube { width: 56px; height: 56px; border-radius: 12px; }
     #toast { bottom: calc(var(--tray-h) + 16px); }
     body.has-strip #toast { bottom: calc(var(--tray-h) + 102px); }
     .steps { grid-template-columns: 1fr; gap: 8px; }
@@ -294,8 +326,10 @@
     #strip { top: 6px; left: 116px; right: 150px; width: auto; transform: none; height: 50px; padding: 4px 6px; gap: 6px; }
     #strip .t { display: none; }
     #strip canvas { height: 42px; }
-    #strip .btns { flex-direction: row; }
+    #strip .btns { grid-template-columns: auto auto auto; }
+    #strip .btns #cineBtn { grid-column: auto; }
     #strip .btns button { min-height: 32px; min-width: 0; padding: 2px 8px; font-size: 12px; }
+    #viewCube { width: 54px; height: 54px; border-radius: 12px; }
     #toast { bottom: 14px; }
     .steps { grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .steps li { display: block; padding: 6px 8px; text-align: center; }
@@ -343,8 +377,11 @@
   </div>
 </nav>
 
+<div id="minimap" class="panel" role="slider" tabindex="0" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="The whole tower: press or drag to go there" title="The whole tower: press or drag to go there" hidden><canvas id="miniCanvas" aria-hidden="true"></canvas></div>
+<button id="followBtn" class="panel" type="button" title="Follow the marble again" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="10" cy="10" r="2.6" fill="#fff"/><path d="M10 1.5v3M10 15.5v3M1.5 10h3M15.5 10h3" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>Follow the marble</button>
+<div id="viewCube" class="panel" role="button" tabindex="0" aria-label="View angle: drag to turn the view round the board, press for the front view. Arrow keys turn it too." title="Drag to turn the view. Click: back to the front view. Alt+arrows turn it too." hidden><canvas id="viewCubeCv" aria-hidden="true"></canvas></div>
 <aside id="inspector" class="panel" aria-label="Selected piece" hidden></aside>
-<div id="strip" class="panel" hidden><div class="t" id="stripTitle"></div><canvas id="stripCanvas" aria-hidden="true"></canvas><div class="btns"><button id="remixBtn" type="button">Remix</button><button id="backBtn" type="button" title="Open your own run again">My run</button></div></div>
+<div id="strip" class="panel" hidden><div class="t" id="stripTitle"></div><canvas id="stripCanvas" aria-hidden="true"></canvas><div class="btns"><button id="remixBtn" type="button">Remix</button><button id="backBtn" type="button" title="Open your own run again">My run</button><button id="cineBtn" type="button" aria-pressed="false" title="Cinematic: the view swings slowly round the run while it plays">Cinematic</button></div></div>
 
 <div id="demos" class="scrim" role="dialog" aria-modal="true" aria-labelledby="demosTitle" hidden>
   <div class="dialog panel">
@@ -368,7 +405,10 @@
       <div class="mrow"><span style="font-weight:800">Beat speed</span><button id="tempoDown2" type="button" aria-label="Slower beat">−</button><output id="tempoVal2" style="font-weight:900;min-width:70px;text-align:center">100 beats a minute</output><button id="tempoUp2" type="button" aria-label="Faster beat">+</button></div>
       <div class="mrow"><button id="metroBtn2" type="button" aria-pressed="false">Metronome off</button><button id="muteBtn" type="button" aria-pressed="false">Sound on</button></div>
     </div>
-    <div class="msec"><h3>Board</h3><div class="mrow"><button id="clearBtn" type="button" class="danger">Clear the board</button><button id="twoDBtn" type="button" hidden>Use the simple 2D view</button></div></div>
+    <div class="msec"><h3>Board</h3>
+      <div class="boardseg" id="boardSeg" role="group" aria-label="Board size"></div>
+      <p class="boardnow" id="boardNow"></p>
+      <div class="mrow"><button id="clearBtn" type="button" class="danger">Clear the board</button><button id="twoDBtn" type="button" hidden>Use the simple 2D view</button></div></div>
   </div>
 </div>
 <div id="coach" class="scrim" role="dialog" aria-modal="true" aria-labelledby="coachTitle" hidden>
@@ -383,6 +423,7 @@
       <li><svg viewBox="0 0 220 130" aria-hidden="true"><rect x="8" y="8" width="204" height="114" rx="10" fill="#8f6a45"/><rect x="40" y="36" width="44" height="9" rx="3" fill="#e5392f" transform="rotate(14 62 40)"/><rect x="92" y="62" width="44" height="9" rx="3" fill="#f0d02a" transform="rotate(-14 114 66)"/><rect x="140" y="88" width="44" height="9" rx="3" fill="#3d6bdb" transform="rotate(14 162 92)"/><g class="ill-marble"><circle cx="60" cy="26" r="7" fill="#4f9be8" stroke="#fff" stroke-width="1.5"/></g><g transform="translate(150 20)"><circle r="17" fill="#2fb463" stroke="#1f8a49" stroke-width="2"/><path d="M-5 -8v16l13-8z" fill="#fff"/></g><text x="100" y="30" font-size="18" fill="#fff" font-family="sans-serif">♪ ♫</text></svg>
         <b><i>3</i>Press Play</b><span>Droppers release marbles and your run plays its tune. Open <em>Demos</em> for songs made of marbles!</span></li>
     </ol>
+    <p class="sub" style="text-align:center;margin:12px 0 0">Look around: <span class="t-mouse"><b>drag</b> the empty pegboard to turn the view, Shift-drag to slide it, scroll to zoom</span><span class="t-touch"><b>one finger</b> turns the view, two fingers slide it, pinch to zoom</span>. The little board at the bottom right shows the angle and puts the view back.</p>
     <div class="coach-go"><button id="coachGo" type="button">Let's build!</button><small>Open this again with the <b>?</b> button.</small></div>
   </div>
 </div>

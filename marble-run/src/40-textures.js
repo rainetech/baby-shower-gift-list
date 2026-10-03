@@ -309,38 +309,28 @@ function genMiscTextures() {
   blurF32(h, W, H, 1, true, 2);
   TEX.miscSurf = surfaceFromHeight(h, W, H, 1.5, 1, true);
 }
-// Painted cinder-block classroom wall (unique, WALL_TEX.u units wide)
-const WALL_TEX = { w: 1280, h: 640, x0: -1500, y0: -1000, uw: 4600, uh: 2300 };
+// Painted cinder-block classroom wall: one tile of 10 x 10 blocks (WALL_TEX.uw x uh units), seamless both ways, so
+// the wall can run as far round a tower as the camera sees (the room adds a gentle large-scale tone on top)
+const WALL_TEX = { w: 1280, h: 640, uw: 5000, uh: 2500 };
 function* genWallTextures() {
-  const { w: W, h: H, uw, uh, x0, y0 } = WALL_TEX, s = W / uw;
+  const { w: W, h: H, uw } = WALL_TEX, s = W / uw;
   const c = cnv(W, H), g = c2d(c);
   g.fillStyle = '#cbc3b1'; g.fillRect(0, 0, W, H);
-  paintMottle(g, W, H, 101, 6, 0.25);
-  paintMottle(g, W, H, 102, 40, 0.18);
-  // paint-roller laps: faint vertical bands
+  paintMottle(g, W, H, 101, 6, 0.25, 'soft-light', null, true);
+  paintMottle(g, W, H, 102, 40, 0.18, 'soft-light', null, true);
+  // paint-roller laps: faint vertical bands (full height, so they tile)
   const rr = mulberry32(104);
-  for (let x = 0; x < W; x += 9 + rr() * 10) { g.fillStyle = rr() < 0.5 ? 'rgba(255,250,238,0.035)' : 'rgba(80,70,55,0.03)'; g.fillRect(x, 0, 6 + rr() * 12, H); }
-  // old masking-tape marks and scuffs (world units; kept clear of the pegboard)
-  const W2T = (wx, wy) => [(wx - x0) * s, (wy - y0) * s];
-  for (const [wx, wy, a] of [[-260, 150, 0.3], [-235, 162, -0.5], [1880, 230, 0.1], [1920, 760, -0.2], [-420, 640, 0.6]]) {
-    const [tx, ty] = W2T(wx, wy);
-    g.save(); g.translate(tx, ty); g.rotate(a); g.fillStyle = 'rgba(200,185,140,0.35)'; g.fillRect(-9, -3, 18, 6); g.restore();
-  }
-  for (let i = 0; i < 26; i++) {                           // chair and shoe scuffs low on the wall
-    const side = i % 2 ? 1 : -1, wx = 800 + side * (900 + rr() * 800), wy = DESK_Y - 70 + rr() * 60;
-    const [tx, ty] = W2T(wx, wy);
-    g.fillStyle = `rgba(60,50,40,${0.04 + rr() * 0.06})`;
-    g.beginPath(); g.ellipse(tx, ty, 2 + rr() * 6, 0.8 + rr() * 1.5, (rr() - 0.5) * 0.6, 0, Math.PI * 2); g.fill();
-  }
+  for (let x = 0; x < W - 12; x += 9 + rr() * 10) { g.fillStyle = rr() < 0.5 ? 'rgba(255,250,238,0.035)' : 'rgba(80,70,55,0.03)'; g.fillRect(x, 0, 6 + rr() * 12, H); }
   const hc = cnv(W, H), hg = c2d(hc);
   hg.fillStyle = '#909090'; hg.fillRect(0, 0, W, H);
   const BW = 500, BH = 250, J = 11;                      // block and joint size (units)
-  const rnd = mulberry32(103);
-  for (let row = -1; row * BH < uh + BH; row++) {
+  const rnd = mulberry32(103), tones = [];
+  for (let i = 0; i < 100; i++) tones.push((rnd() - 0.5) * 0.06);
+  for (let row = -1; row * BH < WALL_TEX.uh + BH; row++) {
     const off = (row % 2) * BW / 2;
     for (let col = -1; col * BW < uw + BW; col++) {
       const x = (col * BW + off) * s, y = row * BH * s, bw = (BW - J) * s, bh = (BH - J) * s;
-      const tone = (rnd() - 0.5) * 0.06;
+      const tone = tones[((row % 10) + 10) % 10 * 10 + ((Math.floor((col * BW + off) / BW) % 10) + 10) % 10];   // (a block and its copy across the seam match)
       g.fillStyle = tone > 0 ? `rgba(255,252,240,${tone})` : `rgba(90,80,60,${-tone})`;
       g.fillRect(x, y, bw, bh);
       // mortar joint: recessed, painted over
@@ -366,8 +356,8 @@ function* genWallTextures() {
   g.putImageData(id, 0, 0);
   TEX.wallAlb = c;
   yield;
-  blurF32(hgt, W, H, 1, false, 1);
-  TEX.wallSurf = surfaceFromHeight(hgt, W, H, 3, 0.72, false);
+  blurF32(hgt, W, H, 1, true, 1);
+  TEX.wallSurf = surfaceFromHeight(hgt, W, H, 3, 0.72, true);
 }
 // Butcher-block desk top (tiling: 1 px/unit, 1024 x 1024 units). Strips run along x.
 function genDeskTextures() {

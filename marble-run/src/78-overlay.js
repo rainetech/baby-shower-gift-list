@@ -10,7 +10,8 @@
  *    flight) and a grey hollow ring where it cannot (it rolls on a piece there).
  *    Drop a bar on a solid ring and it rings exactly on the beat (it snaps there).
  *    Everything fades while marbles roll; playing, each marble shows only the
- *    next half second of its path.
+ *    next half second of its path. On a tower the paths run the whole way down
+ *    (previewSeconds); only the marks in view are drawn and labelled.
  *  - the selected piece's outline and handles (rotate knob, size handles),
  *    the hovered piece, the piece being placed (with its predicted timing),
  *    note names floating up from pieces as they play, bucket counts.
@@ -131,11 +132,13 @@ const previewKey = () => MODEL.version + '|' + (EDIT.ghost ? JSON.stringify(EDIT
 // piece by up to two frames and catch up as soon as it stops. A piece moved by the pointer is always current: its
 // move handler works out the preview for the timing label.
 function overlayPaths(pieces, key) {
-  OVL.stale = false;
-  if (key === PREVIEW.key) return PREVIEW.paths;
+  OVL.stale = PREVIEW.cut;                               // (a path cut short in a live edit: drawn again until whole)
+  if (previewCurrent(key)) return PREVIEW.paths;
   if ((HISTORY.pending || EDIT.ghost) && PREVIEW.paths.size && OVL.frame - OVL.predFrame < 3) { OVL.stale = true; return PREVIEW.paths; }
   OVL.predFrame = OVL.frame;
-  return previewPaths(pieces, key);
+  const paths = previewPaths(pieces, key);
+  OVL.stale = OVL.stale || PREVIEW.cut;
+  return paths;
 }
 function drawPaths(g, t, ppu) {
   const pieces = previewPieces(), key = previewKey();
@@ -145,7 +148,7 @@ function drawPaths(g, t, ppu) {
   // Note labels are placed only when the paths or the view change (a redraw for a hover reuses them). A path that
   // did not change keeps its labels, and the new paths' labels are placed around them (so labels do not jump about
   // while something elsewhere is dragged).
-  const viewKey = VIEWCAM.version + '|' + view.w + 'x' + view.h, lblKey = PREVIEW.key + '|' + viewKey;
+  const viewKey = VIEWCAM.version + '|' + view.w + 'x' + view.h, lblKey = PREVIEW.gen + '|' + viewKey;
   const relabel = lblKey !== OVL.lblKey;
   if (relabel) {
     OVL.lblKey = lblKey; LABEL_BOXES.length = 0;
@@ -184,7 +187,7 @@ function drawPaths(g, t, ppu) {
     for (const b of beats) {
       VIEW.b2sTo(b.x, b.y, SP);
       const r = b.bar ? r1 : r0;
-      if (r < 0.8) continue;
+      if (r < 0.8 || SP[1] < -20 || SP[1] > view.h + 20 || SP[0] < -20 || SP[0] > view.w + 20) continue;
       g.beginPath(); g.arc(SP[0], SP[1], r, 0, Math.PI * 2);
       if (!b.landable || (clean && clean.get(id + '|' + b.tp) === false)) { g.strokeStyle = 'rgba(190, 190, 190, 0.75)'; g.lineWidth = 1; g.stroke(); continue; }
       if (b.bar) { g.fillStyle = col; g.fill(); g.strokeStyle = 'rgba(20, 14, 8, 0.6)'; g.lineWidth = 1; g.stroke(); }
@@ -211,12 +214,15 @@ function screenPath(pr) {
   pr.scr = S; pr.scrKey = key;
   return S;
 }
+// (a point behind the camera, OFFSCREEN from project(), breaks the line: the path goes on from the next one in view)
 function strokePath(g, S, i0, i1) {
   g.beginPath();
-  let lx = S[i0 * 2], ly = S[i0 * 2 + 1];
-  g.moveTo(lx, ly);
-  for (let i = i0 + 1; i < i1; i++) {
-    const x = S[i * 2], y = S[i * 2 + 1], dx = x - lx, dy = y - ly;
+  let lx = NaN, ly = NaN, pen = false;
+  for (let i = i0; i < i1; i++) {
+    const x = S[i * 2], y = S[i * 2 + 1];
+    if (x < -1e5) { pen = false; continue; }
+    if (!pen) { g.moveTo(x, y); lx = x; ly = y; pen = true; continue; }
+    const dx = x - lx, dy = y - ly;
     if (dx * dx + dy * dy < 2.25 && i < i1 - 1) continue;   // (points under 1.5 px apart add nothing to the line)
     g.lineTo(x, y); lx = x; ly = y;
   }
@@ -271,6 +277,7 @@ function placeHitLabels(g, pr, S, ppu, md) {
     const h = hits[hi];
     VIEW.b2sTo(h.x, h.y, SP);
     const hx = SP[0], hy = SP[1];
+    if (hx < -60 || hy < -60 || hx > view.w + 60 || hy > view.h + 60) continue;   // (off screen: a tower's other storeys)
     while (k < P.length - 1 && P[k][2] < h.t) k++;
     const txt = noteLabel(h.note), tw = labelWidth(g, fs, txt) + 9, hw = tw / 2, hh = th / 2;
     let bx = 0, by = 0, bestScore = -Infinity;
@@ -354,13 +361,17 @@ function drawEnd(g, end, id) {
     g.beginPath(); g.moveTo(x, y - 6); g.lineTo(x, y + 5); g.moveTo(x - 4, y + 1); g.lineTo(x, y + 5); g.lineTo(x + 4, y + 1); g.stroke();
   }
 }
-// Phones, a demo playing: a soft halo round each marble in its voice's tint (melody bright, accompaniment darker),
-// so the marbles can be followed at a small scale
+// Phones, a demo playing, and any run on a tower: a soft halo round each marble in its voice's tint (melody bright,
+// accompaniment darker), so the marbles can be followed at a small scale and down a tall board. It fades out as the
+// view zooms in (gone once a marble is 64 px across): close up the glass itself is what to look at.
 function drawHalos(g, ppu) {
-  if (!SIM.playing || !MODEL.demoId || !phoneView()) return;
+  if (!SIM.session || !(tallBoard() || (SIM.playing && MODEL.demoId && phoneView()))) return;
+  const md = 2 * CANON.MARBLE_R * ppu, fade = clamp((64 - md) / 32, 0, 1);
+  if (fade <= 0) return;
   const b = MarbleDemos.cached(MODEL.demoId), dv = b && b.dropperVoice;
   const r = Math.max(10, CANON.MARBLE_R * ppu * 2.2);
   g.save();
+  g.globalAlpha = fade;
   for (const m of drawnMarbles()) {
     const q = marbleDrawPos(m, DRAWPOS);
     if (!q) continue;
@@ -392,10 +403,14 @@ function tracePiece(g, p, pad) {
     return;
   }
   for (const c of CANON.colliders(p)) {
-    if (c.shape === 'circle') {
-      VIEW.b2sTo(c.x, c.y, SP);
-      const r = (c.r + pad) * VIEW.ppu();
-      g.moveTo(SP[0] + r, SP[1]); g.arc(SP[0], SP[1], r, 0, Math.PI * 2);
+    if (c.shape === 'circle') {                       // (its outline projected point by point: an ellipse from an angle)
+      const r = c.r + pad;
+      for (let i = 0; i <= 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        VIEW.b2sTo(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r, SP);
+        if (i) g.lineTo(SP[0], SP[1]); else g.moveTo(SP[0], SP[1]);
+      }
+      g.closePath();
       continue;
     }
     const L = Math.sqrt(c.len2), ux = c.abx / L, uy = c.aby / L, nx = -uy, ny = ux, R = c.hw + pad;
@@ -565,7 +580,7 @@ function drawBucketCounts(g, ppu) {
   g.restore();
 }
 function drawEmptyHint(g, t, ppu) {
-  const s = VIEW.b2s(BOARD_W / 2, BOARD_H / 2);
+  const c = tallBoard() ? viewCentre() : [BOARD_W / 2, BOARD_H / 2], s = VIEW.b2s(c[0], c[1]);   // (a tower: where you are on it)
   g.save();
   g.textAlign = 'center'; g.textBaseline = 'middle';
   const fs = clamp(ppu * 34, 15, 26);

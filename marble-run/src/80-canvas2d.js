@@ -148,44 +148,53 @@ function createCanvas2DRenderer(canvas) {
   }
   const b2s = (x, y) => [cam.ox + x * cam.s, cam.oy + y * cam.s];
   const s2b = (px, py) => [(px - cam.ox) / cam.s, (py - cam.oy) / cam.s];
-  // The room and the pegboard, painted once per view
+  // The room and the pegboard, painted once per view (only the part in view: a tower may be many screens tall)
   function paintBackground() {
     const W = canvas.width, H = canvas.height, d = view.dpr;
-    bg = document.createElement('canvas'); bg.width = W; bg.height = H;
+    if (!bg) bg = document.createElement('canvas');
+    if (bg.width !== W || bg.height !== H) { bg.width = W; bg.height = H; }
     const g = bg.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
     const wall = g.createLinearGradient(0, 0, 0, H);
     wall.addColorStop(0, '#d9d1c1'); wall.addColorStop(1, '#bfb5a2');
     g.fillStyle = wall; g.fillRect(0, 0, W, H);
     g.setTransform(cam.s * d, 0, 0, cam.s * d, cam.ox * d, cam.oy * d);
-    const s = cam.s;
-    g.fillStyle = '#a0784a'; g.fillRect(-2000, DESK_Y, 6000, 2000);
+    const s = cam.s, v = visible2D();
+    g.fillStyle = '#a0784a'; g.fillRect(v.x0 - 10, DESK_Y, v.x1 - v.x0 + 20, Math.max(10, v.y1 - DESK_Y + 10));
     g.shadowColor = 'rgba(40, 25, 10, 0.4)'; g.shadowBlur = 24 * s * d; g.shadowOffsetX = 8 * s * d; g.shadowOffsetY = 12 * s * d;
     g.fillStyle = '#d7b98e'; g.fillRect(-BOARD_PAD - FRAME_W, -BOARD_PAD - FRAME_W, BOARD_W + 2 * (BOARD_PAD + FRAME_W), BOARD_H + 2 * (BOARD_PAD + FRAME_W));
     g.shadowColor = 'transparent';
-    const pg = g.createLinearGradient(0, 0, BOARD_W, BOARD_H);
+    // (the board's tone drifts gently along a tower instead of one gradient stretched over all of it)
+    const pg = g.createLinearGradient(0, 0, BOARD_W, Math.min(BOARD_H, BOARD_W * 0.7));
     pg.addColorStop(0, '#9c7650'); pg.addColorStop(1, '#84613f');
     g.fillStyle = pg; g.fillRect(-BOARD_PAD, -BOARD_PAD, BOARD_W + 2 * BOARD_PAD, BOARD_H + 2 * BOARD_PAD);
-    // holes (skipped when they would be smaller than a pixel)
+    // holes in view (skipped when they would be smaller than a pixel)
     if (s * 3.7 * d > 0.8) {
       g.fillStyle = 'rgba(38, 22, 10, 0.85)';
-      for (let y = 0; y <= BOARD_H; y += GRID) { g.beginPath(); for (let x = 0; x <= BOARD_W; x += GRID) { g.moveTo(x + 3.7, y); g.arc(x, y, 3.7, 0, Math.PI * 2); } g.fill(); }
+      const hx0 = Math.max(0, Math.floor(v.x0 / GRID) * GRID), hx1 = Math.min(BOARD_W, v.x1), hy0 = Math.max(0, Math.floor(v.y0 / GRID) * GRID), hy1 = Math.min(BOARD_H, v.y1);
+      for (let y = hy0; y <= hy1; y += GRID) { g.beginPath(); for (let x = hx0; x <= hx1; x += GRID) { g.moveTo(x + 3.7, y); g.arc(x, y, 3.7, 0, Math.PI * 2); } g.fill(); }
     }
     g.fillStyle = '#b9bec5'; g.fillRect(TROUGH.x0, TROUGH.y0, TROUGH.x1 - TROUGH.x0, TROUGH.y1 - TROUGH.y0);
     g.fillStyle = '#e6e9ed'; g.fillRect(TROUGH.x0, TROUGH.y0, TROUGH.x1 - TROUGH.x0, 4);
   }
+  // The board area in view (board units, with a margin for shadows and pieces reaching in)
+  function visible2D() { const a = s2b(0, 0), b = s2b(view.w, view.h); return { x0: a[0] - 60, y0: a[1] - 60, x1: b[0] + 60, y1: b[1] + 60 }; }
+  const inView = (p, v) => { const r = pieceReach(p); return !(p.x + r < v.x0 || p.x - r > v.x1 || p.y + r < v.y0 || p.y - r > v.y1); };
   function render(t) {
     const marbles = drawnMarbles().length;
     const sig = [MODEL.version, VIEWCAM.version, canvas.width, canvas.height, EDIT.ghost ? JSON.stringify(EDIT.ghost) : '', EDIT.lifted].join('|');
     const busy = marbles > 0 || fxAnimating() || EDIT.pulse > 0;
     if (!busy && sig === lastSig) { drawOverlay(t); return false; }
     lastSig = sig;
-    const key = canvas.width + 'x' + canvas.height + ':' + VIEWCAM.version;
+    const key = canvas.width + 'x' + canvas.height + ':' + VIEWCAM.version + ':' + BOARD_W + 'x' + BOARD_H;
     if (key !== bgKey || !bg) { paintBackground(); bgKey = key; }
     const d = view.dpr;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(bg, 0, 0);
     ctx.setTransform(cam.s * d, 0, 0, cam.s * d, cam.ox * d, cam.oy * d);
-    const all = EDIT.ghost ? MODEL.pieces.concat([EDIT.ghost]) : MODEL.pieces;
+    const v = visible2D(), all = [];
+    for (const p of MODEL.pieces) if (inView(p, v)) all.push(p);
+    if (EDIT.ghost) all.push(EDIT.ghost);
     for (const p of all) {                            // soft shadows first, then the metal
       ctx.save(); ctx.shadowColor = 'rgba(30, 16, 6, 0.45)'; ctx.shadowBlur = 8 * cam.s * d; ctx.shadowOffsetX = 5 * cam.s * d; ctx.shadowOffsetY = 7 * cam.s * d;
       drawPiece2D(ctx, p, null, t); ctx.restore();
