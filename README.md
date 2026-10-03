@@ -54,5 +54,5 @@ npm test
 
   Guests cannot edit or cancel a reservation, so use this if someone books by mistake.
 - **Updating the gift list.** Gifts are in `public/gifts-full.js` and images in `public/assets/<ASIN>.jpg`. Reservations are keyed by Amazon ASIN, so reservations for a removed gift stay in the database but no longer appear.
-- **Price comparisons.** `public/alternative-prices.js` holds verified exact-match offers from other UAE retailers. A gift can have several retailers, listed cheapest first. Prices are snapshots, and the check date shown on the site is `priceCheckDate` in that file.
+- **Price comparisons.** `public/alternative-prices.js` holds verified exact-match offers from other UAE retailers. A gift can have several retailers, listed cheapest first. Prices are snapshots, and the check date shown on the site is `priceCheckDate` in that file. An offer with its own `checked` date is an older snapshot that could not be re-verified; the site labels it "as of <date>" until it is re-checked or removed.
 - Amazon and alternative prices are indicative and may change. Delivery charges are not included.

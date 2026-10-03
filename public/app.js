@@ -109,20 +109,32 @@ function renderOffers(fragment, gift, amazonPrice) {
   const offers = [...(alternativePrices[gift.id] ?? [])].sort((a, b) => a.value - b.value);
   if (!offers.length) return;
 
+  // Offers without `checked` were verified on priceCheckDate. Older snapshots carry their own date
+  // and are not used for the saving label unless they are all we have.
+  const isCurrent = (offer) => !offer.checked || offer.checked === priceCheckDate;
+  const basis = (offers.find(isCurrent) ?? offers[0]);
+  const checkedOn = isCurrent(basis) ? priceCheckDate : basis.checked;
+
   const comparison = fragment.querySelector(".price-comparison");
   const list = fragment.querySelector(".offer-list");
   comparison.hidden = false;
   fragment.querySelector(".comparison-title").textContent = offers.length > 1 ? "Exact UAE matches" : "Exact UAE match";
-  fragment.querySelector(".saving-label").textContent = comparisonLabel(amazonPrice, offers[0].value);
-  fragment.querySelector(".price-checked").textContent = `Prices checked ${priceCheckDate}`;
-  if (amazonPrice !== null && offers[0].value < amazonPrice) comparison.classList.add("is-cheaper");
+  fragment.querySelector(".saving-label").textContent = comparisonLabel(amazonPrice, basis.value);
+  fragment.querySelector(".price-checked").textContent = `Prices checked ${checkedOn}`;
+  if (amazonPrice !== null && basis.value < amazonPrice) comparison.classList.add("is-cheaper");
 
   offers.forEach((offer) => {
     const item = offerTemplate.content.cloneNode(true);
     const link = item.querySelector(".alternative-link");
+    const age = isCurrent(offer) ? "" : ` (price from ${offer.checked})`;
     link.href = offer.url;
-    link.setAttribute("aria-label", `View ${gift.name} at ${offer.retailer} for ${offer.price}`);
-    item.querySelector(".retailer-name").textContent = offer.retailer;
+    link.setAttribute("aria-label", `View ${gift.name} at ${offer.retailer} for ${offer.price}${age}`);
+    item.querySelector(".retailer-label").textContent = offer.retailer;
+    if (!isCurrent(offer)) {
+      const date = item.querySelector(".offer-date");
+      date.hidden = false;
+      date.textContent = `as of ${offer.checked.replace(/ \d{4}$/, "")}`;
+    }
     item.querySelector(".alternative-price").textContent = offer.price;
     list.append(item);
   });

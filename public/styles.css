@@ -247,6 +247,7 @@ select { min-height: 42px; padding: 0 12px; color: var(--ink); background: white
 .alternative-link { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; color: var(--berry); text-decoration: none; }
 .alternative-link:hover .retailer-name { text-decoration: underline; }
 .retailer-name { font-size: .78rem; font-weight: 700; }
+.offer-date { margin-left: 6px; color: #93878b; font-size: .62rem; font-weight: 500; }
 .alternative-price { font-size: .84rem; }
 .price-checked { display: block; margin-top: 6px; color: #93878b; font-size: .62rem; }
 .gift-actions { display: flex; align-items: center; gap: 10px; margin-top: auto; }
