@@ -1,7 +1,11 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+import { collection, doc, getFirestore, onSnapshot, serverTimestamp, setDoc } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+import { firebaseConfig, registryUserEmail } from "./firebase-config.js";
 import { gifts } from "./gifts-full.js";
 import { alternativePrices, priceCheckDate } from "./alternative-prices.js";
 
-const POLL_INTERVAL_MS = 15000;
+const REGISTRY_ID = "rochelle-and-christopher";
 
 const PRICE_BANDS = [
   { id: "all", label: "All prices", test: () => true },
@@ -30,18 +34,16 @@ const dialogClose = document.querySelector(".dialog-close");
 
 let activeGift = null;
 let reservations = new Map();
-let pollTimer = null;
+let stopListening = null;
 let activeBand = "all";
 let activeSort = "default";
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    ...options,
-    headers: { "Content-Type": "application/json" }
-  });
-  const data = await response.json().catch(() => ({}));
-  return { ok: response.ok, status: response.status, data };
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
+
+function derivePassword(code) {
+  return `registry-${code}-access`;
 }
 
 function setBusy(form, busy) {
@@ -206,48 +208,15 @@ function openReservation(gift) {
   setTimeout(() => guestName.focus(), 50);
 }
 
-function showGate(message = "") {
-  stopPolling();
-  registry.hidden = true;
-  gate.hidden = false;
-  accessMessage.textContent = message;
-  if (reserveDialog.open) reserveDialog.close();
-}
-
-function showRegistry() {
-  gate.hidden = true;
-  registry.hidden = false;
-  renderGifts();
-  startPolling();
-}
-
-// Returns false when the guest is not signed in (or the registry cannot be reached).
-async function refreshReservations() {
-  const { ok, status, data } = await api("/api/reservations");
-  if (status === 401) return false;
-  if (!ok) throw new Error(`Reservations request failed (${status})`);
-  reservations = new Map(data.reservations.map((entry) => [entry.itemId, entry]));
-  renderGifts();
-  return true;
-}
-
-async function poll() {
-  if (document.hidden) return;
-  try {
-    if (!(await refreshReservations())) showGate("Please enter the invitation code again.");
-  } catch {
+function startReservationListener() {
+  stopListening?.();
+  const reservationsRef = collection(db, "registries", REGISTRY_ID, "reservations");
+  stopListening = onSnapshot(reservationsRef, (snapshot) => {
+    reservations = new Map(snapshot.docs.map((entry) => [entry.id, entry.data()]));
+    renderGifts();
+  }, () => {
     giftSummary.textContent = "Reservations are temporarily unavailable. Please refresh.";
-  }
-}
-
-function startPolling() {
-  stopPolling();
-  pollTimer = setInterval(poll, POLL_INTERVAL_MS);
-}
-
-function stopPolling() {
-  clearInterval(pollTimer);
-  pollTimer = null;
+  });
 }
 
 accessForm.addEventListener("submit", async (event) => {
@@ -256,24 +225,17 @@ accessForm.addEventListener("submit", async (event) => {
   setBusy(accessForm, true);
 
   try {
-    const { ok, status } = await api("/api/login", {
-      method: "POST",
-      body: JSON.stringify({ code: accessCode.value.trim() })
-    });
-    if (ok) {
-      accessForm.reset();
-      if (await refreshReservations()) showRegistry();
-      else accessMessage.textContent = "Something went wrong. Please try again.";
-    } else if (status === 429) {
+    await signInWithEmailAndPassword(auth, registryUserEmail, derivePassword(accessCode.value.trim()));
+    accessForm.reset();
+  } catch (error) {
+    if (error?.code === "auth/too-many-requests") {
       accessMessage.textContent = "Too many attempts. Please wait a few minutes and try again.";
-    } else if (status === 401) {
+    } else if (error?.code === "auth/network-request-failed") {
+      accessMessage.textContent = "We couldn't reach the registry. Please check your connection and try again.";
+    } else {
       accessMessage.textContent = "That invitation code isn't quite right. Please try again.";
       accessCode.select();
-    } else {
-      accessMessage.textContent = "The registry is being prepared. Please try again shortly.";
     }
-  } catch {
-    accessMessage.textContent = "We couldn't reach the registry. Please check your connection and try again.";
   } finally {
     setBusy(accessForm, false);
   }
@@ -293,27 +255,15 @@ reserveForm.addEventListener("submit", async (event) => {
   setBusy(reserveForm, true);
 
   try {
-    const { ok, status, data } = await api("/api/reservations", {
-      method: "POST",
-      body: JSON.stringify({ itemId: activeGift.id, name })
+    const reservationRef = doc(db, "registries", REGISTRY_ID, "reservations", activeGift.id);
+    await setDoc(reservationRef, {
+      itemId: activeGift.id,
+      name,
+      reservedAt: serverTimestamp()
     });
-
-    if (ok) {
-      reservations.set(data.reservation.itemId, data.reservation);
-      renderGifts();
-      reserveDialog.close();
-    } else if (status === 409) {
-      reserveMessage.textContent = "This gift has just been reserved by another guest. Please choose another one.";
-      await refreshReservations().catch(() => {});
-    } else if (status === 401) {
-      showGate("Please enter the invitation code again.");
-    } else if (data.error === "invalid_name") {
-      reserveMessage.textContent = "Please enter a name of up to 50 characters.";
-    } else {
-      reserveMessage.textContent = "We couldn't save your reservation. Please try again.";
-    }
+    reserveDialog.close();
   } catch {
-    reserveMessage.textContent = "We couldn't reach the registry. Please check your connection and try again.";
+    reserveMessage.textContent = "This gift may have just been reserved by another guest. Please choose another one.";
   } finally {
     setBusy(reserveForm, false);
   }
@@ -329,19 +279,20 @@ reserveDialog.addEventListener("click", (event) => {
   if (event.target === reserveDialog) reserveDialog.close();
 });
 
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && !registry.hidden) poll();
-});
-
 renderPriceFilter();
 
-// A guest who already entered the code has a session cookie, so skip the gate for them.
-refreshReservations()
-  .then((signedIn) => {
-    if (signedIn) showRegistry();
-    else gate.hidden = false;
-  })
-  .catch(() => {
+onAuthStateChanged(auth, (user) => {
+  if (user) {
+    gate.hidden = true;
+    registry.hidden = false;
+    renderGifts();
+    startReservationListener();
+  } else {
     gate.hidden = false;
-    accessMessage.textContent = "The registry is being prepared. Please try again shortly.";
-  });
+    registry.hidden = true;
+    stopListening?.();
+    if (reserveDialog.open) reserveDialog.close();
+  }
+});
+
+window.addEventListener("pagehide", () => stopListening?.());

@@ -1,5 +1,4 @@
-node_modules/
-.vercel/
-.env
-.env.*
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
 .DS_Store
