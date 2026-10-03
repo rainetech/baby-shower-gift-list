@@ -110,7 +110,7 @@ export const gifts = [
   {
     "id": "B0D2QC5DFG",
     "name": "Muslin Swaddle Blankets for Newborn, 3 Pack Breathable Soft Receiving Blanket, Large 38 x 40 inches Swaddle Wrap Burping Clothes Diapers, Essentials Infant Shower Items, Toddler Gift (Gentle Colors)",
-    "price": "AED 70.80",
+    "price": "AED 70.00",
     "image": "assets/B0D2QC5DFG.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0D2QC5DFG/"
   },
