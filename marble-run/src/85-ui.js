@@ -227,14 +227,27 @@ function setShowPath(on) { UI.showPath = on; pathBtn.setAttribute('aria-pressed'
 pathBtn.addEventListener('click', () => setShowPath(!UI.showPath));
 setShowPath(UI.showPath);
 // Cinematic (the demo strip): the view swings slowly round the run while it plays (off by default; remembered)
-const cineBtn = $('#cineBtn');
-function setCinematic(on) {
-  UI.cinematic = !!on;
+// With reduced motion on, the toggle is inert and says so (aria-disabled; the stored preference is left as it was and
+// comes back when reduced motion goes off).
+const cineBtn = $('#cineBtn'), CINE_TITLE = cineBtn.title;
+let cineWanted = store.get('marbleMusic.cinematic') === '1';
+function setCinematic(on, remember = true) {
+  if (remember) { cineWanted = !!on; store.set('marbleMusic.cinematic', cineWanted ? '1' : '0'); }
+  UI.cinematic = cineWanted && !reducedMotion;
   cineBtn.setAttribute('aria-pressed', String(UI.cinematic));
-  store.set('marbleMusic.cinematic', UI.cinematic ? '1' : '0');
+  cineBtn.setAttribute('aria-disabled', String(reducedMotion));
+  cineBtn.title = reducedMotion ? 'Off: reduced motion is on' : CINE_TITLE;
 }
-setCinematic(store.get('marbleMusic.cinematic') === '1');
-cineBtn.addEventListener('click', () => { setCinematic(!UI.cinematic); say(UI.cinematic ? 'Cinematic on: the view swings round the run while it plays.' : 'Cinematic off.'); });
+setCinematic(cineWanted, false);
+cineBtn.addEventListener('click', () => {
+  if (reducedMotion) { say('Cinematic is off: reduced motion is on.'); return; }
+  setCinematic(!UI.cinematic);
+  say(UI.cinematic ? 'Cinematic on: the view swings round the run while it plays.' : 'Cinematic off.');
+});
+if (RM_QUERY) {
+  const onRM = (e) => { reducedMotion = e.matches; setCinematic(cineWanted, false); };
+  if (RM_QUERY.addEventListener) RM_QUERY.addEventListener('change', onRM); else if (RM_QUERY.addListener) RM_QUERY.addListener(onRM);
+}
 
 /* ---- The view compass (#viewCube): a small picture of the pegboard on its wall as the camera sees it (turned by
  *  the same yaw and pitch), with the angle under it. Drag on it to orbit (2 axes), press it for the front view; arrow
@@ -305,7 +318,7 @@ cubeEl.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   try { cubeEl.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   stopOrbitMotion();
-  CUBE.drag = { id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, moved: false, raw: orbitRaw() };
+  CUBE.drag = { id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
 });
 cubeEl.addEventListener('pointermove', (e) => {
   const d = CUBE.drag;
@@ -313,7 +326,7 @@ cubeEl.addEventListener('pointermove', (e) => {
   if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 3) return;
   d.moved = true;
   const g = 2.2 * RAD;                                            // (a small dial: 2.2° per px)
-  orbitBy(-(e.clientX - d.lx) * g, (e.clientY - d.ly) * g, d.raw);
+  orbitBy(-(e.clientX - d.lx) * g, (e.clientY - d.ly) * g);
   d.lx = e.clientX; d.ly = e.clientY;
 });
 const cubeUp = (e) => {
@@ -573,8 +586,8 @@ function demoNotReady(id, andPlay) {
   clearInterval(UI.solveTick);
   if (st.state === 'solving') {
     UI.wantDemo = { id, andPlay };
-    const text = () => { const s = Math.round((MarbleDemos.status(id).elapsed || 0) / 1000); return title + ' plays differently on this computer, so it is being solved again here… ' + s + ' s' + (s >= 8 ? ' (up to about half a minute)' : ''); };
-    toast(text(), 'Cancel', () => { UI.wantDemo = null; clearInterval(UI.solveTick); }, 1e9);
+    const text = () => { const s = Math.round((MarbleDemos.status(id).elapsed || 0) / 1000); return title + ' plays differently on this computer, so it is being solved again here… ' + s + ' s' + (s >= 30 ? ' (still solving)' : s >= 8 ? ' (up to about half a minute)' : ''); };
+    toast(text(), 'Cancel', () => { UI.wantDemo = null; clearInterval(UI.solveTick); MarbleDemos.cancel(id); }, 1e9);
     UI.solveTick = setInterval(() => {
       if (MarbleDemos.status(id).state !== 'solving' || !UI.wantDemo || UI.wantDemo.id !== id) { clearInterval(UI.solveTick); return; }
       const t = $('#toast span'); if (t) t.textContent = text();

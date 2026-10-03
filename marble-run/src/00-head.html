@@ -124,6 +124,7 @@
   #strip .btns #cineBtn { grid-column: 1 / -1; }
   #strip .btns button[hidden] { display: none; }
   #cineBtn[aria-pressed="true"] { background: #fff1c9; box-shadow: 0 0 0 2px var(--sel) inset; }
+  #cineBtn[aria-disabled="true"] { opacity: .5; cursor: default; }
 
   /* ---- The view compass: a small picture of the board from the camera's angle; drag it to turn the view, press it for
    *  the front view (placed by placeViewCube at the bottom right of the free area) ---- */
@@ -278,8 +279,9 @@
     #strip .btns { gap: 3px; }
     #strip .btns button { min-height: 27px; min-width: 0; padding: 2px 6px; font-size: 11px; }
     #viewCube { width: 56px; height: 56px; border-radius: 12px; }
-    #toast { bottom: calc(var(--tray-h) + 16px); }
-    body.has-strip #toast { bottom: calc(var(--tray-h) + 102px); }
+    /* (a toast sits above the view compass, a 56 px square in the free area's bottom right corner, never on top of it) */
+    #toast { bottom: calc(var(--tray-h) + 82px); }
+    body.has-strip #toast { bottom: calc(var(--tray-h) + 168px); }
     .steps { grid-template-columns: 1fr; gap: 8px; }
     .steps li { display: grid; grid-template-columns: 104px 1fr; gap: 2px 10px; align-items: center; text-align: left; padding: 8px 10px; }
     .steps svg { grid-row: span 2; margin: 0; }
@@ -330,7 +332,7 @@
     #strip .btns #cineBtn { grid-column: auto; }
     #strip .btns button { min-height: 32px; min-width: 0; padding: 2px 8px; font-size: 12px; }
     #viewCube { width: 54px; height: 54px; border-radius: 12px; }
-    #toast { bottom: 14px; }
+    #toast { bottom: 70px; max-width: calc(100vw - 300px); }      /* (above the compass in the free area's corner, between the controls and the tray) */
     .steps { grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .steps li { display: block; padding: 6px 8px; text-align: center; }
     .steps svg { max-width: 110px; margin: 0 auto 2px; }

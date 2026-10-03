@@ -15,8 +15,8 @@ const srgb2lin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055
 function lin(hex, k = 1) { const n = parseInt(hex.slice(1), 16); return [srgb2lin((n >> 16) / 255) * k, srgb2lin(((n >> 8) & 255) / 255) * k, srgb2lin((n & 255) / 255) * k]; }
 // Surface finishes: [roughness multiplier, metalness] (the brushed texture's own roughness is ~0.26)
 // Anodised aluminium and brass are true metals (their colour is the colour of their reflections), on the brushed grain
-const FIN = { anod: [0.92, 1], steel: [1.25, 1], satin: [1.9, 1], chrome: [0.16, 1], brass: [0.78, 1], rubber: [3.5, 0], galv: [2.3, 1] };
-const STEEL = [0.62, 0.63, 0.65], CHROME = [0.95, 0.95, 0.97], BRASS = lin('#e3c27a'), RUBBER = [0.035, 0.035, 0.04];
+const FIN = { anod: [0.92, 1], steel: [1.25, 1], satin: [1.9, 1], chrome: [0.16, 1], brass: [0.78, 1], rubber: [3.5, 0], galv: [2.3, 1], nickel: [1.3, 0.05] };
+const STEEL = [0.62, 0.63, 0.65], CHROME = [0.95, 0.95, 0.97], BRASS = lin('#e3c27a'), RUBBER = [0.035, 0.035, 0.04], NICKEL = [0.88, 0.89, 0.91];
 // anodised colour: the note's colour lifted 15% towards white (in sRGB, which keeps the hue the eye sees)
 function anodCol(note) { return hexRgb(noteHex(note)).map((v) => srgb2lin(lerp(v / 255, 1, 0.15))); }
 
@@ -112,7 +112,9 @@ function screw(M, x, y, z, r = 1.9) {
 // plate with two chrome screws. Everything of it in the marble's reach lies inside the rail's collider outline.
 function bracket(M, x, y, ang, note, dz) {
   const c = Math.cos(ang), s = Math.sin(ang), at = ([u, v]) => [x + c * u - s * v, y + s * u + c * v];
-  prism(put(M('metal'), anodCol(note), FIN.anod), roundRectPts(1.8, 2.2, 0.8, 2).map(at), 1.4, ZM + dz + 1.5, 0.5, (u, v) => [u / 64, v / 64]);
+  // (a silent rail's ties are satin nickel: anodised in no colour, a pure metal would mirror only the dark floor from below;
+  //  half metal, half matt coat, the sunlit side and the bounced light show their own mid-grey)
+  prism(note == null ? put(M('metal'), NICKEL, FIN.nickel) : put(M('metal'), anodCol(note), FIN.anod), roundRectPts(1.8, 2.2, 0.8, 2).map(at), 1.4, ZM + dz + 1.5, 0.5, (u, v) => [u / 64, v / 64]);
   prism(put(M('metal'), STEEL, FIN.satin), roundRectPts(5.6, 3.3, 1.2, 3).map(at), 0.2, 1.6, 0.4, (u, v) => [u / 64, v / 64 + 0.3]);
   for (const u of [-3.7, 3.7]) { const q = at([u, 1.6]); screw(M, q[0], q[1], 1.6, 1.15); }
 }

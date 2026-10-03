@@ -310,7 +310,8 @@ function genMiscTextures() {
   TEX.miscSurf = surfaceFromHeight(h, W, H, 1.5, 1, true);
 }
 // Painted cinder-block classroom wall: one tile of 10 x 10 blocks (WALL_TEX.uw x uh units), seamless both ways, so
-// the wall can run as far round a tower as the camera sees (the room adds a gentle large-scale tone on top)
+// the wall can run as far round a tower as the camera sees (the room adds a gentle large-scale tone on top). It holds
+// the paint (block-to-block tone, roller laps, pits) at 0.26 px per unit; the mortar joints are the shader's.
 const WALL_TEX = { w: 1280, h: 640, uw: 5000, uh: 2500 };
 function* genWallTextures() {
   const { w: W, h: H, uw } = WALL_TEX, s = W / uw;
@@ -332,15 +333,7 @@ function* genWallTextures() {
       const x = (col * BW + off) * s, y = row * BH * s, bw = (BW - J) * s, bh = (BH - J) * s;
       const tone = tones[((row % 10) + 10) % 10 * 10 + ((Math.floor((col * BW + off) / BW) % 10) + 10) % 10];   // (a block and its copy across the seam match)
       g.fillStyle = tone > 0 ? `rgba(255,252,240,${tone})` : `rgba(90,80,60,${-tone})`;
-      g.fillRect(x, y, bw, bh);
-      // mortar joint: recessed, painted over
-      g.fillStyle = 'rgba(110, 100, 85, 0.22)'; g.fillRect(x + bw, y, J * s, bh + J * s); g.fillRect(x, y + bh, bw, J * s);
-      const gr = hg.createLinearGradient(0, y + bh, 0, y + bh + J * s);
-      gr.addColorStop(0, '#606060'); gr.addColorStop(0.5, '#303030'); gr.addColorStop(1, '#606060');
-      hg.fillStyle = gr; hg.fillRect(x, y + bh, bw + J * s, J * s);
-      const gr2 = hg.createLinearGradient(x + bw, 0, x + bw + J * s, 0);
-      gr2.addColorStop(0, '#606060'); gr2.addColorStop(0.5, '#303030'); gr2.addColorStop(1, '#606060');
-      hg.fillStyle = gr2; hg.fillRect(x + bw, y, J * s, bh);
+      g.fillRect(x, y, bw, bh);               // (the mortar joints between the blocks are drawn by the shader, exactly: `uWall`)
     }
   }
   yield;
@@ -451,7 +444,23 @@ const SUN_DIR = V3.norm([-0.52, 0.62, 0.58]);          // towards the key light 
 // `diffuse`: the light the room sheds on matt surfaces (the spherical harmonics); the reflections (the prefiltered
 // map) also see the bright room behind the viewer, a lit wall and a long ceiling light, which put crisp streaks on
 // rods, bevels and domes without changing the tone of the board or the wall.
-function envRadiance(d, blur, diffuse = false) {
+// `mirror`: the room as chrome and glass see it (a dim room with bright, crisp features, see RM); its luminance is stored in
+// the cube's alpha (genEnvironment) and the shader gives the plain room's colour that luminance, so only the sharpest mirrors
+// use it and every matt or satin metal keeps the pale daylit room it was tuned against.
+// The mirror room: the tone of the walls and the desk between the lights, and the lights (azimuth from the board's
+// normal, elevation, in degrees: from, to, from, to; radiance; green and blue relative to red). Azimuth > 0 is the viewer's right.
+const RM = {
+  wall: 0.06, desk: 0.07, edge: 0.03,
+  feats: [
+    [-16, 16, -8, 62, 3.0, 0.99, 0.95],          // the light column behind the viewer: a whiteboard and the ceiling panel over it
+    [-110, -72, -6, 54, 4.0, 1.0, 1.1],          // the window (the sun comes through it, up on the left)
+    [72, 110, -6, 54, 3.4, 1.0, 0.95],           // a door and a second window on the right
+    [-16, 16, -60, -10, 1.6, 0.95, 0.85],        // the sunlit desk in front of the whiteboard
+    [-110, -72, -60, -10, 2.0, 0.9, 0.7],        // the patch of sun the window throws on the desk
+    [72, 110, -60, -10, 1.8, 0.95, 0.85],        // and its bounce on the other side
+  ],
+};
+function envRadiance(d, blur, diffuse = false, mirror = false) {
   const [x, y, z] = d;
   const soft = 0.012 + blur * blur * 0.8;              // angular edge softness (radians)
   const sm = (e0, e1, v) => { const t = clamp((v - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -468,7 +477,7 @@ function envRadiance(d, blur, diffuse = false) {
   const inWin = sm(hu + s2, hu - s2, du) * sm(hv0 - s2, hv0 + s2, dv) * sm(hv1 + s2, hv1 - s2, dv) * (hu / Math.max(hu, soft));
   if (inWin > 0) {
     let mull = 1;
-    if (blur < 0.3) {
+    if (blur < 0.3 && diffuse) {          // (the reflections see no mullions: a hairline in the plain room would leave a hairline in the mirror room's gain)
       const mw = 0.016 + soft * 0.5;
       const cu = Math.abs(((az - waz) / 0.23) - Math.round((az - waz) / 0.23)) * 0.23;
       const cv = Math.abs(((dv - 0.02) / 0.32) - Math.round((dv - 0.02) / 0.32)) * 0.32;
@@ -479,18 +488,41 @@ function envRadiance(d, blur, diffuse = false) {
     r += (0.85 * L - r) * inWin; g += (0.95 * L - g) * inWin; b += (1.15 * L - b) * inWin;
   }
   if (!diffuse) {
+    // (the mirror room fades back to the pale one as the blur grows: a rough reflection averages the lights and the walls)
+    const crisp = mirror ? 1 - sm(0.25, 0.9, blur) : 0;
+    // below the horizon the reflections see the sunlit desk, not a dark floor: down-facing metal (the undersides of
+    // bars, rail ties from below) would otherwise go black (the matt surfaces' spherical harmonics keep their own tone)
+    if (y < 0) { const kf = sm(0, -0.35 - soft, y), f = lerp(0.32, 0.22, kf), w = 0.85; r = lerp(r, f, w); g = lerp(g, f * 0.93, w); b = lerp(b, f * 0.8, w); }
     // the room round and behind the viewer: pale walls in daylight above, the sunlit desk below
     // (the two meet at eye level with no dark seam between them)
     const kr = sm(-0.5, -0.05, z) * sm(-0.06, 0.1, y), kd = sm(-0.5, -0.05, z) * sm(0.02, -0.08, y) * (1 - sm(-0.75, -0.95, y));
-    r = lerp(r, 0.65, kr); g = lerp(g, 0.64, kr); b = lerp(b, 0.61, kr);
-    r = lerp(r, 0.65, kd); g = lerp(g, 0.63, kd); b = lerp(b, 0.59, kd);
-    // a bright wall facing the board, behind the viewer (a soft rectangle)
+    const wl = lerp(0.65, RM.wall, crisp), dl = lerp(0.65, RM.desk, crisp);
+    r = lerp(r, wl, kr); g = lerp(g, wl * 0.985, kr); b = lerp(b, wl * 0.94, kr);
+    r = lerp(r, dl, kd); g = lerp(g, dl * 0.97, kd); b = lerp(b, dl * 0.91, kd);
+    // a bright wall facing the board, behind the viewer (a soft rectangle: the blur of the lights below)
     const s3 = Math.max(soft, 0.05), az2 = Math.atan2(x, z), el2 = Math.asin(clamp(y, -1, 1));
-    const wall = sm(0.75 + s3, 0.75 - s3, Math.abs(az2 + 0.15)) * sm(-0.02 - s3, -0.02 + s3, el2) * sm(0.5 + s3, 0.5 - s3, el2);
+    const wall = sm(0.75 + s3, 0.75 - s3, Math.abs(az2 + 0.15)) * sm(-0.02 - s3, -0.02 + s3, el2) * sm(0.5 + s3, 0.5 - s3, el2) * (1 - crisp);
     r = lerp(r, 1.35, wall); g = lerp(g, 1.32, wall); b = lerp(b, 1.26, wall);
-    // a long ceiling light strip running left-right over the viewer's head
-    const strip = sm(0.09 + s3, 0.09 - s3, Math.abs(Math.atan2(z - 0.35, y))) * sm(0.9 + s3, 0.9 - s3, Math.abs(x)) * (y > 0 ? 1 : 0) * (0.09 / Math.max(0.09, s3));
+    // a long ceiling light strip running left-right over the viewer's head, and a second one over the board's side of
+    // the room (crisp at the sharp levels: the reflections of rods and domes slide across them as the view turns)
+    // (the mirror room's strips are wider and softer, with the same energy: against its dim walls a 10-degree strip would be a hairline)
+    const w1 = lerp(0.09, 0.2, crisp), w2 = lerp(0.06, 0.14, crisp);
+    const strip = sm(w1 + s3, w1 - s3, Math.abs(Math.atan2(z - 0.35, y))) * sm(0.9 + s3, 0.9 - s3, Math.abs(x)) * (y > 0 ? 1 : 0) * (w1 / Math.max(w1, s3)) * (0.09 / w1);
     r += 4.2 * strip; g += 4.2 * strip; b += 4.0 * strip;
+    const strip2 = sm(w2 + s3, w2 - s3, Math.abs(Math.atan2(z + 0.42, y))) * sm(0.85 + s3, 0.85 - s3, Math.abs(x)) * (y > 0 ? 1 : 0) * (w2 / Math.max(w2, s3)) * (0.06 / w2);
+    r += 3.2 * strip2; g += 3.2 * strip2; b += 3.0 * strip2;
+    // a bright door / whiteboard on the wall behind the viewer, off to one side (a crisp rectangle at the sharp levels)
+    const s4 = Math.max(soft, 0.012);
+    const door = sm(0.17 + s4, 0.17 - s4, Math.abs(az2 - 0.62)) * sm(-0.3 - s4, -0.3 + s4, el2) * sm(0.34 + s4, 0.34 - s4, el2) * (z > 0 ? 1 : 0) * (1 - crisp);
+    r = lerp(r, 1.9, door); g = lerp(g, 1.85, door); b = lerp(b, 1.75, door);
+    // the lit features of the mirror room, as soft-edged rectangles
+    if (crisp > 0) {
+      const sf = Math.max(soft, RM.edge);
+      for (const f of RM.feats) {
+        const k = sm(f[0] * RAD - sf, f[0] * RAD + sf, az2) * sm(f[1] * RAD + sf, f[1] * RAD - sf, az2) * sm(f[2] * RAD - sf, f[2] * RAD + sf, el2) * sm(f[3] * RAD + sf, f[3] * RAD - sf, el2) * sm(-0.3, -0.1, z) * crisp;
+        if (k > 0) { r = lerp(r, f[4], k); g = lerp(g, f[4] * f[5], k); b = lerp(b, f[4] * f[6], k); }
+      }
+    }
   }
   // two fluorescent ceiling panels (energy-conserving when blurred)
   const rho = 0.1;
@@ -521,8 +553,8 @@ function* genEnvironment(gl, out) {
       const data = new Float32Array(S * S * 4);
       for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
         const d = V3.norm(faceDir(f, (x + 0.5) / S * 2 - 1, (y + 0.5) / S * 2 - 1));
-        const c = envRadiance(d, blur), i = (y * S + x) * 4;
-        data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 1;
+        const c = envRadiance(d, blur), m = envRadiance(d, blur, false, true), i = (y * S + x) * 4;
+        data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];   // (alpha: the mirror room's luminance)
       }
       gl.texSubImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, level, 0, 0, S, S, gl.RGBA, gl.FLOAT, data);
     }
@@ -553,43 +585,62 @@ function* genEnvironment(gl, out) {
 /* ============================================================================
  *  The metal workshop set: pegboard, brushed metal, engraved note letters
  * ========================================================================== */
-// Tempered hardboard pegboard: one 320-unit tile holds 16 x 16 holes (a hole every 20 units, like the snap grid).
-// uv = (x + 10) / 320 puts a hole on every multiple of 20. Albedo alpha = baked AO (dark holes).
-const PEG = { tile: 320, pitch: 20, hole: 3.7, px: 3 };
+// Tempered hardboard pegboard: one 320-unit tile of grain (mottle and fibres) at 2 px per unit. The HOLES are not in the
+// texture: the shader draws them from the position (a hole every 20 units: the snap grid, 3.7 units in radius), exactly
+// at any zoom, with parallax down each bore (FS_PBR, `uPeg`). uv = (x + 10) / 320 keeps the grain registered to the
+// holes' grid. Albedo alpha is 1 (the occlusion round the holes comes from the shader).
+const PEG = { tile: 320, pitch: 20, hole: 3.7, px: 2 };
 function* genPegboardTextures() {
-  const S = PEG.tile * PEG.px, n = PEG.tile / PEG.pitch, s = PEG.px;
+  const S = PEG.tile * PEG.px;
   const c = cnv(S, S), g = c2d(c);
   g.fillStyle = '#a07a52'; g.fillRect(0, 0, S, S);
   // (every layer tiles: large-scale tone changes come from the board mesh's own vertex colours)
   paintMottle(g, S, S, 201, 6, 0.04, 'soft-light', null, true);
   paintMottle(g, S, S, 202, 30, 0.1, 'soft-light', null, true);
   paintMottle(g, S, S, 203, 120, 0.1, 'soft-light', null, true);
-  paintFibres(g, S, S, 16000, 204, 'rgba(255,225,185,0.07)', 'rgba(60,35,15,0.09)', 7, 0.9, true);
+  paintFibres(g, S, S, 7200, 204, 'rgba(255,225,185,0.07)', 'rgba(60,35,15,0.09)', 4.7, 0.9, true);
   g.getImageData(0, 0, 1, 1); yield;
   const id = g.getImageData(0, 0, S, S), px = id.data;
   const hgt = new Float32Array(S * S), rough = new Float32Array(S * S), rnd = mulberry32(205), nz = makeNoise2(206, 64);
-  const hr = PEG.hole * s, rim = 1.3 * s;
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    // distance to the nearest hole centre (holes at pitch/2 + k * pitch in tile pixels)
-    const cx = (Math.floor(x / (PEG.pitch * s)) + 0.5) * PEG.pitch * s, cy = (Math.floor(y / (PEG.pitch * s)) + 0.5) * PEG.pitch * s;
-    const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
     const i = y * S + x, k = i * 4;
     const grain = (nz(x / S * 32, y / S * 32, 32) - 0.5) * 0.06 + (rnd() - 0.5) * 0.05;
-    let h = 0.62 + grain * 0.4, ao = 1, dark = 1, r = 0.52 + (nz(x / S * 8, y / S * 8, 8) - 0.5) * 0.12;
-    if (d < hr) {                                   // the hole: a dark shaft
-      const f = d / hr;
-      h = 0.05 + 0.25 * f * f; dark = 0.16 + 0.22 * f * f; ao = 0.25 + 0.4 * f; r = 0.9;
-    } else if (d < hr + rim) {                       // a softly rounded, slightly crushed edge
-      const f = (d - hr) / rim;
-      h = 0.3 + 0.32 * Math.sin(f * Math.PI / 2); dark = 0.8 + 0.2 * f; ao = 0.72 + 0.28 * f;
-    } else if (d < hr + rim * 4) ao = 0.9 + 0.1 * (d - hr - rim) / (rim * 3);
-    px[k] *= dark * (1 + grain); px[k + 1] *= dark * (1 + grain); px[k + 2] *= dark * (1 + grain); px[k + 3] = 255 * ao;
-    hgt[i] = h; rough[i] = r;
+    px[k] *= 1 + grain; px[k + 1] *= 1 + grain; px[k + 2] *= 1 + grain; px[k + 3] = 255;
+    hgt[i] = 0.62 + grain * 0.4; rough[i] = 0.52 + (nz(x / S * 8, y / S * 8, 8) - 0.5) * 0.12;
   }
   g.putImageData(id, 0, 0);
   TEX.pegAlb = c;
   yield;
   TEX.pegSurf = surfaceFromHeight(hgt, S, S, 3.2, rough, true);
+}
+
+// The pegboard's hole pattern as the pieces' reflections see it (FS_PBR, pegSeen): one 20-unit cell, the hole in the middle
+// (1 = board, down to 0.1 in the bore, a darker bevel round it), R8 and mipmapped: the GPU's anisotropic filter then averages it
+// along the long side of a pixel's footprint, so it never aliases whatever the reflection's stretch
+function genPegHoleTile(gl, size = 128) {
+  const px = new Uint8Array(size * size), c = size / 2, R = PEG.hole, ss = 4;
+  const sm = (e0, e1, v) => { const t = clamp((v - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+  let sum = 0;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let v = 0;
+    for (let j = 0; j < ss; j++) for (let i = 0; i < ss; i++) {
+      const d = Math.hypot((x + (i + 0.5) / ss - c) * PEG.pitch / size, (y + (j + 0.5) / ss - c) * PEG.pitch / size);
+      v += 1 - 0.9 * (1 - sm(R - 0.25, R + 0.25, d)) - 0.25 * (1 - sm(R, R + 1.8, d));
+    }
+    px[y * size + x] = Math.round(255 * v / (ss * ss)); sum += px[y * size + x];
+  }
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, size, size, 0, gl.RED, gl.UNSIGNED_BYTE, px);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  const ext = gl.getExtension('EXT_texture_filter_anisotropic');
+  if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(GLR.aniso || 8, gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+  genPegHoleTile.mean = sum / (size * size * 255);
+  return t;
 }
 
 // Brushed metal (tiling, 512 x 512 = 128 x 128 units): long fine streaks along u. Tinted per vertex for

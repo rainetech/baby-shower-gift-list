@@ -6,7 +6,9 @@
  *  - Board: press a piece to select it and drag to move it; drag the yellow knob to turn it (15° steps,
  *    Shift 5°, Alt free); drag the white handles to resize; drag it back onto the tray to remove it.
  *    Drag empty board (one finger) to ORBIT the view round the point in the middle of the screen (a light spin
- *    after a quick drag); Shift-, right- or middle-drag (two fingers) to pan (let go while moving and it glides on);
+ *    after a quick drag; the selection stays through it, only a plain click on empty board deselects). While a demo
+ *    plays a drag that starts on a piece orbits too, and the piece is picked up after a short hold (HOLD_MS);
+ *    Shift-, right- or middle-drag (two fingers) to pan (the board stays under the pointer; let go while moving and it glides on);
  *    wheel or pinch to zoom (on a tower the wheel scrolls and Ctrl+wheel zooms; a two-finger twist turns the view);
  *    double-click a piece to zoom in on it; the wheel over the selected piece turns it. In the 2D view (front-on)
  *    a drag pans instead.
@@ -293,24 +295,30 @@ function trayKey(e) {
 /* ---- The board ---- */
 const POINTERS = new Map();                           // active touch/pen pointers (pinch)
 const TWIST_DEAD = 8 * RAD;                           // a two-finger twist turns the view once it has passed this
+const HOLD_MS = 250;                                  // a piece of a playing demo is picked up after this long held still (a quicker drag turns the view)
+const SLIDE_PX = 16;                                  // two fingers pan (and pause following) after this much NET midpoint travel
 function boardDown(e) {
   const stage = stageEl();
   piano.init();
   stage.focus({ preventScroll: true });
-  POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  const now = performance.now();
+  for (const [id, q] of POINTERS) if (now - q.t > 3000) POINTERS.delete(id);   // (a finger whose pointerup never came: see clearPointers)
+  POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
   try { stage.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   const touch = e.pointerType !== 'mouse';
   if (POINTERS.size === 2) {                          // second finger: pinch (zoom), pan and twist (orbit) the view instead
     stopFling(); stopOrbitMotion();
     if (EDIT.drag && EDIT.drag.kind !== 'pinch') { if (EDIT.drag.kind === 'move' || EDIT.drag.kind === 'handle') { EDIT.lifted = null; endChange(); } }
-    const [a, b] = [...POINTERS.values()];
-    EDIT.drag = { kind: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, a0: Math.atan2(b.y - a.y, b.x - a.x), twist: 0, travel: 0, raw: orbitRaw() };
+    const ids = [...POINTERS.keys()], a = POINTERS.get(ids[0]), b = POINTERS.get(ids[1]);
+    // (the fingers' places as of the last step taken, and which of them has moved since: see pinchStep)
+    EDIT.drag = { kind: 'pinch', ids, pa: { x: a.x, y: a.y }, pb: { x: b.x, y: b.y }, fresh: [false, false], last: -1, run: 0, c0: [(a.x + b.x) / 2, (a.y + b.y) / 2],
+      slid: false, d0: Math.hypot(a.x - b.x, a.y - b.y), a0: Math.atan2(b.y - a.y, b.x - a.x), twist: 0 };
     return;
   }
   if (POINTERS.size > 2) return;
   if (e.pointerType === 'mouse' && ((e.button !== undefined && e.button > 0) || e.shiftKey)) {   // right, middle or Shift-drag: pan
     stopFling(); stopOrbitMotion();
-    EDIT.drag = { kind: 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY };
+    EDIT.drag = { kind: 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
     return;
   }
   const bp = VIEW.s2b(e.clientX, e.clientY);
@@ -326,17 +334,61 @@ function boardDown(e) {
   const tol = (touch ? 16 : 7) / Math.max(0.05, VIEW.ppu());
   const p = pieceAt(bp[0], bp[1], tol);
   if (p) {
+    if (SIM.playing && MODEL.demoId && glOk) {         // a demo playing (not yet your run): a plain drag turns the view, even over a piece;
+      stopFling(); stopOrbitMotion();                  // moving the piece takes a short hold (HOLD_MS), a tap still selects it
+      const t0 = e.timeStamp || now, d = { kind: 'orbit', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, touch, moved: false, pendingMove: p.id, t0, bx: bp[0], by: bp[1] };
+      EDIT.drag = d;
+      setTimeout(() => { if (EDIT.drag === d && d.pendingMove && !d.moved) holdToMove(d); }, HOLD_MS);
+      return;
+    }
     select(p.id);
     EDIT.drag = { kind: 'move', id: e.pointerId, pid: p.id, x0: e.clientX, y0: e.clientY, bx: bp[0], by: bp[1], px: p.x, py: p.y, moved: false };
     return;
   }
-  select(null);
   stopFling(); stopOrbitMotion();
-  // empty board: orbit the 3D view (the 2D view, front-on, pans)
-  EDIT.drag = { kind: glOk ? 'orbit' : 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, touch, raw: orbitRaw(), moved: false };
+  // empty board: orbit the 3D view (the 2D view, front-on, pans). The selection stays through a drag (turning the
+  // view to look at the selected piece from another side is the point); only a plain click on empty board
+  // deselects it (boardUp).
+  EDIT.drag = { kind: glOk ? 'orbit' : 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, touch, moved: false, fromEmpty: true };
+}
+// A drag that began on a piece of a playing demo has been held still for HOLD_MS: it is a normal move drag now
+function holdToMove(d) {
+  const p = pieceById(d.pendingMove);
+  d.pendingMove = null;
+  if (!p || EDIT.drag !== d) return;
+  select(p.id);
+  EDIT.drag = { kind: 'move', id: d.id, pid: p.id, x0: d.x0, y0: d.y0, bx: d.bx, by: d.by, px: p.x, py: p.y, moved: false };
+}
+// A finger (or pen) whose pointerup never came (capture lost, the window blurred or hidden, the canvas replaced under
+// a drag) would stay in POINTERS, and every next finger would be taken for the second of a pinch: let them all go
+function clearPointers() {
+  POINTERS.clear();
+  const d = EDIT.drag;
+  if (d && (d.kind === 'pinch' || d.kind === 'orbit' || d.kind === 'pan')) { EDIT.drag = null; try { stageEl().style.cursor = ''; } catch (e) { /* no stage yet */ } }
+}
+// One step of a two-finger gesture, from the fingers' places now (a, b) and as of the last step (d.pa, d.pb): pinching
+// zooms (about the marble while following, else about the midpoint), twisting turns the yaw (past a dead zone), and
+// moving the midpoint slides the board. Whether this is a slide is decided from the NET travel of the midpoint since
+// the gesture began (SLIDE_PX), not from the sum of its steps, so a steady pinch never lets go of the followed marble;
+// only a slide pauses the follow camera (the twist and the zoom never do).
+function pinchStep(d, a, b) {
+  const dist = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, px = (d.pa.x + d.pb.x) / 2, py = (d.pa.y + d.pb.y) / 2;
+  if (!d.slid && Math.hypot(cx - d.c0[0], cy - d.c0[1]) > SLIDE_PX) d.slid = true;
+  const following = TFOLLOW.active && !TFOLLOW.paused, grab = VIEW.s2b(px, py);   // (the board point that was under the midpoint)
+  if (d.d0 > 10 && dist > 10) zoomAt(cx, cy, dist / d.d0);
+  if (glOk) {
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    let da = ang - d.a0; if (da > Math.PI) da -= 2 * Math.PI; else if (da < -Math.PI) da += 2 * Math.PI;
+    d.a0 = ang;
+    const was = d.twist; d.twist += da;
+    const use = Math.max(0, Math.abs(d.twist) - TWIST_DEAD) * Math.sign(d.twist) - Math.max(0, Math.abs(was) - TWIST_DEAD) * Math.sign(was);
+    if (use) orbitBy(use, 0);
+  }
+  if (d.slid || !following) panGrabPoint(grab, cx, cy, d.slid);     // (a followed view stays put until the slide is certain)
+  d.pa.x = a.x; d.pa.y = a.y; d.pb.x = b.x; d.pb.y = b.y; d.d0 = dist;
 }
 function boardMove(e) {
-  if (POINTERS.has(e.pointerId)) POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (POINTERS.has(e.pointerId)) POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
   const d = EDIT.drag;
   if (!d) {                                           // hover (mouse)
     if (e.pointerType === 'mouse') {
@@ -349,38 +401,33 @@ function boardMove(e) {
     return;
   }
   if (d.kind === 'pinch') {
-    if (POINTERS.size < 2) return;
-    const [a, b] = [...POINTERS.values()];
-    const dist = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-    // two fingers moving together pan (after 10 px, which pauses the follow camera); pinching zooms; twisting turns
-    d.travel += Math.hypot(cx - d.cx, cy - d.cy);
-    panBy(cx - d.cx, cy - d.cy, d.travel > 10);
-    if (d.d0 > 10) zoomAt(cx, cy, dist / d.d0);
-    if (glOk) {
-      const ang = Math.atan2(b.y - a.y, b.x - a.x);
-      let da = ang - d.a0; if (da > Math.PI) da -= 2 * Math.PI; else if (da < -Math.PI) da += 2 * Math.PI;
-      d.a0 = ang;
-      const was = d.twist; d.twist += da;
-      const use = Math.max(0, Math.abs(d.twist) - TWIST_DEAD) * Math.sign(d.twist) - Math.max(0, Math.abs(was) - TWIST_DEAD) * Math.sign(was);
-      if (use) orbitBy(use, 0, d.raw);
-    }
-    d.d0 = dist; d.cx = cx; d.cy = cy;
+    // pointermove arrives one finger at a time, so the midpoint of the fingers' CURRENT places jitters by half a
+    // finger step per event even in a perfectly symmetric pinch. A step is taken only when both fingers have moved
+    // since the last one (or the same finger twice running: the other is resting), from the places both had then.
+    const i = d.ids.indexOf(e.pointerId);
+    if (i < 0 || POINTERS.size < 2 || !POINTERS.has(d.ids[0]) || !POINTERS.has(d.ids[1])) return;
+    d.run = d.last === e.pointerId ? d.run + 1 : 1; d.last = e.pointerId; d.fresh[i] = true;
+    if (!(d.fresh[0] && d.fresh[1]) && d.run < 2) return;
+    d.fresh[0] = d.fresh[1] = false;
+    pinchStep(d, POINTERS.get(d.ids[0]), POINTERS.get(d.ids[1]));
     return;
   }
   if (e.pointerId !== d.id) return;
   if (d.kind === 'pan') {                            // (the fling's speed from the events' own times: a busy frame does not slow it)
     const now = e.timeStamp || performance.now(), dtm = Math.max(1, now - (d.lt || now - 16)), k = Math.min(1, dtm / 50);
     d.vx = (d.vx || 0) * (1 - k) + ((e.clientX - d.lx) / dtm * 1000) * k; d.vy = (d.vy || 0) * (1 - k) + ((e.clientY - d.ly) / dtm * 1000) * k; d.lt = now;
-    panBy(e.clientX - d.lx, e.clientY - d.ly); d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing';
+    if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) >= 4) d.moved = true;
+    panGrab(d.lx, d.ly, e.clientX, e.clientY); d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing';
     return;
   }
   if (d.kind === 'orbit') {                          // drag right: the view swings left round the target (the board turns with the pointer)
+    if (d.pendingMove && (e.timeStamp || performance.now()) - d.t0 >= HOLD_MS && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) { holdToMove(d); return; }   // (held still: the timer may have been late)
     if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) return;
-    if (!d.moved) { d.moved = true; orbitHint(d.touch); }
-    const g = orbitGain(), dy = -(e.clientX - d.lx) * g, dp = (e.clientY - d.ly) * g;
+    if (!d.moved) { d.moved = true; d.pendingMove = null; orbitHint(d.touch); }
+    const g = orbitGain(), dy = -(e.clientX - d.lx) * g, dp = (e.clientY - d.ly) * g * PITCH_GAIN;
     const now = e.timeStamp || performance.now(), dtm = Math.max(1, now - (d.lt || now - 16)), k = Math.min(1, dtm / 50);
     d.vy = (d.vy || 0) * (1 - k) + (dy / dtm * 1000) * k; d.vp = (d.vp || 0) * (1 - k) + (dp / dtm * 1000) * k; d.lt = now;
-    orbitBy(dy, dp, d.raw);
+    orbitBy(dy, dp);
     d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing';
     return;
   }
@@ -410,9 +457,11 @@ function boardUp(e) {
   if (e.pointerId !== d.id) return;
   EDIT.drag = null;
   stageEl().style.cursor = '';
+  if ((d.kind === 'pan' || d.kind === 'orbit') && d.fromEmpty && !d.moved && e.type === 'pointerup') select(null);   // a plain click on empty board deselects
+  if (d.kind === 'orbit' && d.pendingMove && !d.moved && e.type === 'pointerup') select(d.pendingMove);              // a tap on a piece of a playing demo selects it
   if (d.kind === 'pan' && d.lt && (e.timeStamp || performance.now()) - d.lt < 80 && Math.hypot(d.vx, d.vy) > 250 && !reducedMotion) { FLING.vx = d.vx; FLING.vy = d.vy; return; }
-  if (d.kind === 'orbit') {                          // let go while turning: it spins on a little and settles
-    if (d.moved && d.lt && (e.timeStamp || performance.now()) - d.lt < 80 && Math.hypot(d.vy, d.vp) > 0.6 && !reducedMotion) { ORBIT.vyaw = clamp(d.vy, -4, 4); ORBIT.vpitch = clamp(d.vp, -4, 4); ORBIT.raw = d.raw; }
+  if (d.kind === 'orbit') {                          // let go while turning: it spins on a little (at most ~20°) and settles
+    if (d.moved && d.lt && (e.timeStamp || performance.now()) - d.lt < 80 && Math.hypot(d.vy, d.vp) > 0.6 && !reducedMotion) { ORBIT.vyaw = clamp(d.vy, -SPIN_MAX, SPIN_MAX); ORBIT.vpitch = clamp(d.vp, -SPIN_MAX, SPIN_MAX); }
     return;
   }
   if (d.kind === 'move') {
@@ -550,37 +599,43 @@ function camDist() { return glOk && GLR.cam.D ? GLR.cam.D : view.h / (2 * Math.m
 function fovYNow() { return glOk && GLR.cam.fovY ? GLR.cam.fovY : 2 * Math.atan(Math.tan(CAMERA.fovDiag / 2) * view.h / Math.max(1, Math.hypot(view.w, view.h))); }
 const zoomForDist = (dist) => VIEWCAM.zoom * camDist() / Math.max(1, dist);
 
-/* ---- Orbit: yaw / pitch about the target. The limits are eased into (soft): the last 12% of each range is
- *  compressed, so a drag slows down as it nears a limit and never snaps. A drag accumulates a RAW (unlimited) angle
- *  that maps through softLimit; anything else (keys, the widget, the API) goes through orbitTo / orbitBy. A quick
- *  drag let go spins on and settles (ORBIT.vyaw / vpitch). The cinematic swing (UI.cinematic, the demo strip) adds a
- *  slow sine on top while a run plays (CAMERA.autoYaw / autoPitch), fading in and out. */
-const ORBIT = { vyaw: 0, vpitch: 0, raw: null, glide: null, autoT: 0, autoK: 0 };
+/* ---- Orbit: yaw / pitch about the target. The limits are eased into (soft): within the last 12% of a range every step
+ *  towards the limit is scaled by the distance still to go (an exponential approach: a drag slows down as it nears a
+ *  limit, never snaps and never passes it), while a step away from it is taken in full at once, so a view that sits at
+ *  a limit (the floor pushed it there, or a drag held it there) answers the first pixel of a drag the other way. A
+ *  quick drag let go spins on and settles (ORBIT.vyaw / vpitch). The cinematic swing (UI.cinematic, the demo strip)
+ *  adds a slow sine on top while a demo plays (CAMERA.autoYaw / autoPitch), fading in and out. */
+const ORBIT = { vyaw: 0, vpitch: 0, glide: null, autoT: 0, autoK: 0 };
 const SOFT = 0.12;
-function softLimit(raw, lo, hi) {
+const PITCH_GAIN = 0.55;                              // tilting is slower than turning (a pitch range is only 90°, a yaw range 150°)
+const SPIN_MAX = 1.5;                                 // rad/s: the spin after a flick travels at most SPIN_MAX / SPIN_DECAY = ~19°
+const SPIN_DECAY = 4.5;                               // 1/s
+// Add d to the angle v (limits lo..hi, the last SOFT of the range eased into)
+function softAdd(v, d, lo, hi) {
   const w = Math.max(1e-6, (hi - lo) * SOFT);
-  if (raw > hi - w) return hi - w + w * (1 - Math.exp(-(raw - (hi - w)) / w));
-  if (raw < lo + w) return lo + w - w * (1 - Math.exp(-((lo + w) - raw) / w));
-  return raw;
-}
-function unsoft(v, lo, hi) {
-  const w = Math.max(1e-6, (hi - lo) * SOFT);
-  if (v > hi - w) return hi - w - w * Math.log(Math.max(1e-6, 1 - (v - (hi - w)) / w));
-  if (v < lo + w) return lo + w + w * Math.log(Math.max(1e-6, 1 - ((lo + w) - v) / w));
-  return v;
+  v = clamp(v, lo, hi);
+  if (d > 0) {
+    const lin = Math.min(d, Math.max(0, hi - w - v)); v += lin; d -= lin;
+    if (d > 0) v = hi - (hi - v) * Math.exp(-d / w);
+  } else if (d < 0) {
+    const lin = Math.min(-d, Math.max(0, v - lo - w)); v -= lin; d += lin;
+    if (d < 0) v = lo + (v - lo) * Math.exp(d / w);
+  }
+  return clamp(v, lo, hi);
 }
 const yawLimits = () => [-CAMERA.yawMax, CAMERA.yawMax];
 function pitchLimits() { const c = glOk && GLR.cam.target; return [c ? pitchFloor(c[1], GLR.cam.D) : CAMERA.pitchMin, CAMERA.pitchMax]; }
-function orbitRaw() { const y = yawLimits(), p = pitchLimits(); return [unsoft(CAMERA.yaw, y[0], y[1]), unsoft(CAMERA.pitch, p[0], p[1])]; }
-function orbitGain() { return 0.9 * Math.PI / Math.max(320, view.w); }     // radians per px: a drag across the screen is ~160°
-function stopOrbitMotion() { ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null; ORBIT.glide = null; }
-// Turn by (dyaw, dpitch) radians, accumulating in raw (a drag's own, or the shared one)
-function orbitBy(dyaw, dpitch, raw = ORBIT.raw || (ORBIT.raw = orbitRaw())) {
+function orbitRaw() { return [CAMERA.yaw, CAMERA.pitch]; }       // (the angles a turn starts from)
+// radians per px: a fixed angular rate however small the screen (0.16°/px on a phone or tablet, 0.127°/px on a 1280 px
+// desktop, where a drag across the screen turns ~160°); tilting uses PITCH_GAIN of it
+function orbitGain() { return 0.9 * Math.PI / Math.max(1024, view.w); }
+function stopOrbitMotion() { ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.glide = null; }
+// Turn by (dyaw, dpitch) radians
+function orbitBy(dyaw, dpitch) {
   if (!glOk) return;
   ORBIT.glide = null;
-  raw[0] += dyaw; raw[1] += dpitch;
   const y = yawLimits(), p = pitchLimits();
-  CAMERA.yaw = softLimit(raw[0], y[0], y[1]); CAMERA.pitch = softLimit(raw[1], p[0], p[1]);
+  CAMERA.yaw = softAdd(CAMERA.yaw, dyaw, y[0], y[1]); CAMERA.pitch = softAdd(CAMERA.pitch, dpitch, p[0], p[1]);
   applyCam(); refreshViewCube();
 }
 // Glide to an orientation (radians) over dur s (at once with reduced motion)
@@ -588,11 +643,11 @@ function orbitTo(yaw, pitch, dur = 0.5) {
   if (!glOk) return;
   const y = yawLimits(), p = pitchLimits();
   yaw = clamp(yaw, y[0], y[1]); pitch = clamp(pitch, p[0], p[1]);
-  ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null;
+  ORBIT.vyaw = ORBIT.vpitch = 0;
   if (reducedMotion || dur <= 0) { ORBIT.glide = null; CAMERA.yaw = yaw; CAMERA.pitch = pitch; applyCam(); refreshViewCube(); return; }
   ORBIT.glide = { y0: CAMERA.yaw, p0: CAMERA.pitch, y1: yaw, p1: pitch, t: 0, dur };
 }
-function orbitStep(dyaw, dpitch) { const r = orbitRaw(), y = yawLimits(), p = pitchLimits(); orbitTo(softLimit(r[0] + dyaw, y[0], y[1]), softLimit(r[1] + dpitch, p[0], p[1]), 0.25); }
+function orbitStep(dyaw, dpitch) { const y = yawLimits(), p = pitchLimits(); orbitTo(softAdd(CAMERA.yaw, dyaw, y[0], y[1]), softAdd(CAMERA.pitch, dpitch, p[0], p[1]), 0.25); }
 function frontView(dur = 0.5) { orbitTo(CAMERA.yaw0, CAMERA.pitch0, dur); }
 const isFrontView = () => Math.abs(CAMERA.yaw - CAMERA.yaw0) < 0.5 * RAD && Math.abs(CAMERA.pitch - CAMERA.pitch0) < 0.5 * RAD;
 // Run fn with the camera at the front view (for measuring a fit), then put the orbit back
@@ -600,6 +655,13 @@ function withFrontCam(fn) {
   const y = CAMERA.yaw, p = CAMERA.pitch, ay = CAMERA.autoYaw, ap = CAMERA.autoPitch;
   CAMERA.yaw = CAMERA.yaw0; CAMERA.pitch = CAMERA.pitch0; CAMERA.autoYaw = CAMERA.autoPitch = 0;
   try { fn(); } finally { CAMERA.yaw = y; CAMERA.pitch = p; CAMERA.autoYaw = ay; CAMERA.autoPitch = ap; applyCam(); }
+}
+// Is the camera being moved by hand or on its own (orbit drag, pinch, pan, a glide, the spin after a flick, the
+// Cinematic swing, a fling)? The shadow cascades take a wider margin while it is (updateShadowRegion).
+function cameraMoving() {
+  const d = EDIT.drag;
+  return !!((d && ((d.kind === 'orbit' && d.moved) || d.kind === 'pinch' || (d.kind === 'pan' && d.moved))) || ORBIT.glide || ORBIT.vyaw || ORBIT.vpitch || ORBIT.autoK > 0
+    || VIEWCAM.glide || VIEWCAM.anim || FLING.vx || FLING.vy);
 }
 // Each frame: the glide, the spin after a drag, the cinematic swing
 function stepOrbit(dt) {
@@ -613,16 +675,16 @@ function stepOrbit(dt) {
     if (G.t >= 1) ORBIT.glide = null;
     changed = true;
   } else if (ORBIT.vyaw || ORBIT.vpitch) {
-    if (!ORBIT.raw) ORBIT.raw = orbitRaw();
-    ORBIT.raw[0] += ORBIT.vyaw * dt; ORBIT.raw[1] += ORBIT.vpitch * dt;
+    const k = Math.exp(-dt * SPIN_DECAY), run = (1 - k) / SPIN_DECAY;   // (the exact distance covered in dt: the same spin at any frame rate)
     const y = yawLimits(), p = pitchLimits();
-    CAMERA.yaw = softLimit(ORBIT.raw[0], y[0], y[1]); CAMERA.pitch = softLimit(ORBIT.raw[1], p[0], p[1]);
-    const k = Math.exp(-dt * 4.5);
+    CAMERA.yaw = softAdd(CAMERA.yaw, ORBIT.vyaw * run, y[0], y[1]); CAMERA.pitch = softAdd(CAMERA.pitch, ORBIT.vpitch * run, p[0], p[1]);
     ORBIT.vyaw *= k; ORBIT.vpitch *= k;
-    if (Math.hypot(ORBIT.vyaw, ORBIT.vpitch) < 0.02) { ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null; }
+    if (Math.hypot(ORBIT.vyaw, ORBIT.vpitch) < 0.02) ORBIT.vyaw = ORBIT.vpitch = 0;
     changed = true;
   }
-  const swing = UI.cinematic && SIM.session && !reducedMotion && !(EDIT.drag && (EDIT.drag.kind === 'orbit' || EDIT.drag.kind === 'pinch'));
+  // (Cinematic is a demo-strip preference: a remembered '1' does not swing the builder's own run, whose strip, and so
+  //  whose toggle, is hidden; a Remix keeps its demo's strip)
+  const swing = UI.cinematic && SIM.session && !!stripDemo() && !reducedMotion && !(EDIT.drag && (EDIT.drag.kind === 'orbit' || EDIT.drag.kind === 'pinch'));
   if (swing) {
     ORBIT.autoT += dt; ORBIT.autoK = Math.min(1, ORBIT.autoK + dt / 2.5);
     CAMERA.autoYaw = ORBIT.autoK * 0.34 * Math.sin(ORBIT.autoT * 2 * Math.PI / 30);
@@ -649,7 +711,10 @@ function zoomToPiece(p) {
   const r = uiSafeRect(), size = Math.max(60, pieceReach(p) * 2 + 20);
   const want = Math.min(r.r - r.l, r.b - r.t) * 0.7 / size;
   const z = clamp(VIEWCAM.zoom * want / Math.max(1e-6, VIEW.ppu()), ZOOM_MIN, zoomMax());
-  pauseFollow(); setViewMode('free'); TFOLLOW.userZoom = true;
+  setViewMode('free'); TFOLLOW.userZoom = true;
+  const aim = TFOLLOW.active && !TFOLLOW.paused && followAim();
+  if (aim) { glideTo(aim.x, aim.y, z, 0.5); return; }            // following: only the zoom glides (it lands on the marble's moving aim)
+  pauseFollow();
   glideTo(p.x, p.y, z, 0.5);
 }
 // The camera as the API reports it: angles in degrees, the distance, the target (board units), following
@@ -696,6 +761,28 @@ function panBy(dx, dy, user = true) {                 // (screen px: the board m
   VIEWCAM.panX += mx; VIEWCAM.panY += my;
   applyCam(); clampPan();
   if (user) { setViewMode('free'); pauseFollow(); }
+}
+// Pan so that the board point under screen point (x0, y0) comes under (x1, y1): the board is held by the pointer from
+// any angle (panBy measures the displacement at the middle of the view, so at an oblique angle a grabbed point
+// would slide off the pointer). A grab that misses the board (too far from the target: a steep angle near the
+// horizon) falls back to panBy.
+function panGrab(x0, y0, x1, y1, user = true) {
+  if (!glOk) { panBy(x1 - x0, y1 - y0, user); return; }
+  const g = VIEW.s2b(x0, y0);
+  if (!panGrabPoint(g, x1, y1, user)) panBy(x1 - x0, y1 - y0, user);
+}
+// Move the view so that board point g is under screen point (px, py); false (nothing moved) when g is not near the view
+function panGrabPoint(g, px, py, user = true) {
+  const c = rectCentre(uiSafeRect()), t = VIEW.s2b(c[0], c[1]), [sw, sh] = viewSpan(), lim = 3 * Math.max(sw, sh);
+  if (!(Math.abs(g[0] - t[0]) < lim && Math.abs(g[1] - t[1]) < lim)) return false;
+  for (let it = 0; it < 2; it++) {                    // (a pan moves the point under any pixel by exactly the pan: the second pass is for the pitch floor)
+    const now = VIEW.s2b(px, py);
+    VIEWCAM.panX += clamp(g[0] - now[0], -5000, 5000); VIEWCAM.panY += clamp(g[1] - now[1], -5000, 5000);
+    applyCam();
+  }
+  clampPan();
+  if (user) { setViewMode('free'); pauseFollow(); }
+  return true;
 }
 // Zoom (a dolly) keeping the board point under (px, py) where it is. Zooming by hand does not pause the follow
 // camera (it keeps following at the new distance), but it stops it from zooming back in on its own (userZoom).
@@ -809,21 +896,31 @@ function setViewMode(m) {
   b.title = toRun ? 'Zoom to the run (F)' : whole;
 }
 function resetViewCam() { VIEWCAM.zoom = 1; VIEWCAM.panX = 0; VIEWCAM.panY = 0; VIEWCAM.anim = null; VIEWCAM.glide = null; SCROLLQ.x = SCROLLQ.y = 0; stopFling(); FOLLOW.saved = null; TFOLLOW.userZoom = false; }
-// The whole board (zoom 1), from the front
-function fitView() { resetViewCam(); frontView(); relayout(); VIEWMODE.mode = ''; setViewMode('board'); }
-// The view a board opens with: a Wide board whole; a tower from its top at the home zoom; from the front
-function homeView() {
-  if (!tallBoard() || !RENDER) { fitView(); return; }
-  resetViewCam(); frontView(); relayout();
+// The whole board (zoom 1), from the front. While a marble is followed this lets go of it first (the whole tower is
+// what was asked for, and the follow camera would zoom straight back in); the Follow button, which resumes at the
+// home zoom, is the way back.
+function fitView(dur = 0.5) {
+  pauseFollow();
+  resetViewCam(); frontView(dur); relayout(); VIEWMODE.mode = ''; setViewMode('board');
+}
+// The view a board opens with: a Wide board whole; a tower from its top at the home zoom; from the front (dur: the
+// turn to the front, 0 = at once)
+function homeView(dur = 0.5) {
+  if (!tallBoard() || !RENDER) { fitView(dur); return; }
+  resetViewCam(); frontView(dur); relayout();
   VIEWCAM.zoom = homeZoom(); applyCam();
   const [, sh] = viewSpan();
   setViewCentre((FIT_BOX.x0 + FIT_BOX.x1) / 2, FIT_BOX.y0 + sh / 2 - 12);
   VIEWMODE.mode = ''; setViewMode('run');
 }
-// Reset view (the widget, the API): the front view of the board as it opened; a run being followed stays followed
-function resetView() { homeView(); refreshViewCube(); }
+// Reset view (the widget, the API): the front view of the board as it opened; a run being followed stays followed.
+// The widget turns to it over 0.5 s; the API (dur 0) lands at once, so a script reads the new camera straight away.
+function resetView(dur = 0.5) { homeView(dur); refreshViewCube(); }
 // Fit (F): the whole board, or (from the whole board) the run again
-function toggleFit() { if (VIEWMODE.mode === 'board' && MODEL.pieces.length && (!stripDemo() || tallBoard())) frameRun(); else fitView(); }
+function toggleFit() {
+  pauseFollow();
+  if (VIEWMODE.mode === 'board' && MODEL.pieces.length && (!stripDemo() || tallBoard())) frameRun(); else fitView();
+}
 // The board area the run takes: every piece's metal, dropper tubes and pails, plus a margin
 function runBox(pieces = MODEL.pieces) {
   const b = piecesBox(pieces);
@@ -886,8 +983,8 @@ function resumeFollow() {
   TFOLLOW.paused = false; TFOLLOW.vx = TFOLLOW.vy = 0; TFOLLOW.leadId = null; TFOLLOW.userZoom = false;
   SCROLLQ.x = SCROLLQ.y = 0; stopFling();
   refreshFollowBtn();
-  const aim = followAim();
-  if (aim) glideTo(aim.x, aim.y, Math.max(VIEWCAM.zoom, homeZoom() * 0.999), 0.6);
+  const aim = followAim(), hz = homeZoom() * 0.999;
+  if (aim) { glideTo(aim.x, aim.y, Math.max(VIEWCAM.zoom, hz), 0.6); if (VIEWCAM.zoom < hz) setViewMode('run'); }   // (back at the home zoom: the Fit button says Fit again)
 }
 onSimChange((k) => { if (k === 'play') { TFOLLOW.paused = false; TFOLLOW.leadId = null; TFOLLOW.userZoom = false; } refreshFollowBtn(); });
 // The lead marble { id, x, y, aheadY } (display positions), or null
@@ -931,8 +1028,37 @@ function followAim() {
   let cy = my + 0.15 * sh;                          // the marble a third of the way down the view,
   cy = Math.max(cy, ay - 0.35 * sh);                // the next 1.2 s of its way in view below it (to 85 %),
   cy = Math.min(cy, my + 0.3 * sh);                 // but never higher than a fifth of the way down
-  const B = FIT_BOX, fits = B.x1 - B.x0 <= sw * 1.02;
-  return { x: fits ? (B.x0 + B.x1) / 2 : mx, y: cy };
+  const B = FIT_BOX, fits = B.x1 - B.x0 <= sw * 1.02, ax = fits ? (B.x0 + B.x1) / 2 : mx;
+  return { x: ax, y: aimInScreen(ax, cy, mx, my, ay) };
+}
+// The aim above is worked out front-on. From a combined yaw and pitch at the limits the board is foreshortened and
+// the far end of the marble plane rises up the screen, so the same aim leaves the marble 77 % of the way down the
+// free area and the next pieces off the bottom. Correct it in screen space: pretend the camera moved to the aim
+// (a pure translation in the marble plane, so a board point P then lands where P - t lands now), project the marble
+// (mx, my) and the look-ahead point (mx, ahead), and if the marble is outside 25-45 % of the free area's height or
+// the look-ahead below 85 % (or the marble above 20 %) slide the aim along the board by what moves that point
+// where it should be. The correction grows from nothing at the edge of those bands, so it is smooth, and a front-on
+// view needs none. (The spring in followCam smooths what comes out.)
+function aimInScreen(ax, ay0, mx, my, ahead) {
+  if (!glOk || !GLR.cam.inv) return ay0;
+  const r = uiSafeRect(), h = Math.max(40, r.b - r.t), c = viewCentre(), tx = ax - c[0], span = viewSpan(r)[1];
+  let ty = ay0 - c[1];
+  const fy = (px, py) => { const q = project(px - tx, py - ty, ZM); return q[1] <= OFFSCREEN / 2 ? null : (q[1] - r.t) / h; };
+  const shiftTo = (px, py, want) => {                 // slide the pretended camera so that board point (px, py) lands `want` of the way down
+    for (let it = 0; it < 2; it++) {
+      const q = project(px - tx, py - ty, ZM), sx = q[0], sy = q[1];
+      if (sy <= OFFSCREEN / 2) return;
+      const qm = unproject(sx, sy), qd = unproject(sx, r.t + want * h);
+      ty += clamp(qm[1] - qd[1], -2 * span, 2 * span);
+    }
+  };
+  let m = fy(mx, my);
+  if (m != null && (m < 0.25 || m > 0.45)) shiftTo(mx, my, clamp(m, 0.25, 0.45));
+  const a = fy(mx, ahead);
+  if (a != null && a > 0.85) shiftTo(mx, ahead, 0.85);
+  m = fy(mx, my);
+  if (m != null && m < 0.2) shiftTo(mx, my, 0.2);
+  return c[1] + ty;
 }
 // Each frame while a session runs on a tower: the view moves along with the aim's (smoothed) speed and a critically
 // damped spring (an exact step: calm at any frame rate) takes up the rest, so a steady fall is followed without lag
@@ -954,7 +1080,7 @@ function followCam(dt) {
   const G = VIEWCAM.glide;
   if (G) { G.x = aim.x; G.y = aim.y; return; }             // (a glide in progress lands on the moving aim)
   const hz = homeZoom();
-  if (VIEWCAM.zoom < hz * 0.85 && !TFOLLOW.userZoom) { glideTo(aim.x, aim.y, hz, 0.9); TFOLLOW.vx = TFOLLOW.vy = 0; return; }   // (a zoom set by hand is kept)
+  if (VIEWCAM.zoom < hz * 0.85 && !TFOLLOW.userZoom) { glideTo(aim.x, aim.y, hz, 0.9); setViewMode('run'); TFOLLOW.vx = TFOLLOW.vy = 0; return; }   // (a zoom set by hand is kept)
   const c = viewCentre(), [sw, sh] = viewSpan();
   const ox = c[0] + TFOLLOW.ax * dt - aim.x, oy = c[1] + TFOLLOW.ay * dt - aim.y;
   if (Math.abs(oy) > 1.1 * sh || Math.abs(ox) > 1.1 * sw) { glideTo(aim.x, aim.y, VIEWCAM.zoom, 0.8); TFOLLOW.vx = TFOLLOW.vy = 0; return; }
@@ -1083,11 +1209,14 @@ function attachInput() {
   stage.addEventListener('pointermove', boardMove);
   stage.addEventListener('pointerup', boardUp);
   stage.addEventListener('pointercancel', boardUp);
+  stage.addEventListener('lostpointercapture', (e) => { if (POINTERS.has(e.pointerId)) boardUp(e); });   // (capture gone without a pointerup)
   stage.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !EDIT.drag) EDIT.hover = null; });
   stage.addEventListener('wheel', boardWheel, { passive: false });
   stage.addEventListener('dblclick', boardDblClick);
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
 }
+window.addEventListener('blur', clearPointers);
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearPointers(); });
 function attachTray() {
   for (const type of PIECE_TYPES) {
     const b = TRAY_BTNS[type];

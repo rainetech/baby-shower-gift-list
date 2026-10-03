@@ -29,7 +29,10 @@ const store = {
   json(k, fallback) { try { const v = JSON.parse(store.get(k)); return v == null ? fallback : v; } catch (e) { return fallback; } },
 };
 
-const reducedMotion = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } })();
+// Reduced motion follows the OS setting live (a change mid-session is taken up by the swing, the spin and the glides
+// the next frame; 85-ui.js listens for the change to update the Cinematic toggle)
+const RM_QUERY = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)'); } catch (e) { return null; } })();
+let reducedMotion = !!(RM_QUERY && RM_QUERY.matches);
 const touchUI = (() => { try { return matchMedia('(hover: none) and (pointer: coarse)').matches; } catch (e) { return false; } })();
 
 /* ---- Notes ----

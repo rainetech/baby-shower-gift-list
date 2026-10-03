@@ -26,31 +26,44 @@ const SOLVER_WORKER = (() => {
       const cut = (a, b) => { const i = t.indexOf(M(a)), j = t.indexOf(M(b)); return i >= 0 && j > i ? t.slice(i + M(a).length, j) : null; };
       const canon = cut('CANON:BEGIN', 'CANON:END'), solver = cut('SOLVER:BEGIN', 'SOLVER:END');
       if (canon && solver && typeof Worker !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && URL.createObjectURL) {
-        src = canon + '\n' + solver + '\nself.onmessage = function (e) { var d = e.data; try { var r = MarbleSolver.solveSong(d.song, CANON, { verify: false, hint: d.hint }); self.postMessage({ ok: true, layout: r.layout, targets: r.targets }); } catch (err) { self.postMessage({ ok: false, error: String((err && err.message) || err) }); } };\n';
+        src = canon + '\n' + solver + '\nself.onmessage = function (e) { var d = e.data; if (d.hang) { for (;;) { /* (?dev test hook: a solve that never ends) */ } } try { var r = MarbleSolver.solveSong(d.song, CANON, { verify: false, hint: d.hint }); self.postMessage({ ok: true, layout: r.layout, targets: r.targets }); } catch (err) { self.postMessage({ ok: false, error: String((err && err.message) || err) }); } };\n';
       }
     } catch (e) { src = null; }
     return src;
   }
   const available = () => !!source();
+  // How long one solve may take before it is given up (a hung or throttled worker must not hold the queue for the
+  // session): 90 s, 3 minutes on a phone (a song takes seconds to about half a minute); ?dev: window.__mmSolveDeadline (ms)
+  const deadline = () => (typeof DEV !== 'undefined' && DEV && window.__mmSolveDeadline) || (typeof GLR !== 'undefined' && GLR.mobile ? 180000 : 90000);
   function next() {
     if (busy || !queue.length) return;
     const job = queue.shift();
     busy = true;
-    let url = null, w = null;
-    const end = () => { busy = false; try { if (w) w.terminate(); } catch (e) { /* gone */ } try { if (url) URL.revokeObjectURL(url); } catch (e) { /* gone */ } setTimeout(next, 0); };
+    let url = null, w = null, timer = 0, over = false;
+    const end = () => { over = true; clearTimeout(timer); busy = false; try { if (w) w.terminate(); } catch (e) { /* gone */ } try { if (url) URL.revokeObjectURL(url); } catch (e) { /* gone */ } setTimeout(next, 0); };
+    // (ends the running job with an error: the deadline, or a cancel)
+    job.abort = (err) => { if (over) return; end(); job.reject(err); };
     try {
       url = URL.createObjectURL(new Blob([source()], { type: 'text/javascript' }));
       w = new Worker(url);
     } catch (e) { end(); job.reject(e); return; }
-    w.onmessage = (e) => { const d = e.data || {}; end(); if (d.ok) job.resolve({ layout: d.layout, targets: d.targets }); else job.reject(new Error(d.error || 'the solve failed')); };
-    w.onerror = (e) => { end(); job.reject(new Error((e && e.message) || 'the solver worker failed')); };
-    w.postMessage({ song: job.song, hint: job.hint });
+    w.onmessage = (e) => { if (over) return; const d = e.data || {}; end(); if (d.ok) job.resolve({ layout: d.layout, targets: d.targets }); else job.reject(new Error(d.error || 'the solve failed')); };
+    w.onerror = (e) => { if (over) return; end(); job.reject(new Error((e && e.message) || 'the solver worker failed')); };
+    timer = setTimeout(() => job.abort(new Error('took too long')), deadline());
+    w.postMessage({ song: job.song, hint: job.hint, hang: typeof DEV !== 'undefined' && DEV && !!window.__mmSolverHang });
   }
   // Solve `song` (opts.hint: the round that solved its baked tower, MarbleSolver.hintFrom) on a worker, queued:
-  // a promise of { layout, targets }; null when workers are not available here
+  // a promise of { layout, targets } (it has .cancel(): leave the queue, or stop the worker that is running it);
+  // null when workers are not available here
   function solve(song, hint) {
     if (!available()) return null;
-    return new Promise((resolve, reject) => { queue.push({ song, hint, resolve, reject }); next(); });
+    let job = null;
+    const p = new Promise((resolve, reject) => { job = { song, hint, resolve, reject, abort: null }; queue.push(job); next(); });
+    p.cancel = () => {
+      const i = queue.indexOf(job);
+      if (i >= 0) { queue.splice(i, 1); job.reject(new Error('cancelled')); } else if (job.abort) job.abort(new Error('cancelled'));
+    };
+    return p;
   }
   return { solve, available, get queued() { return queue.length + (busy ? 1 : 0); } };
 })();

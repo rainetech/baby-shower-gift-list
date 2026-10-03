@@ -19,11 +19,13 @@ node tools/tower-test.js                     # towers in the page: checkpointed 
 node tools/tower-shots.js out/tower [--gpu | --2d] [--only desk|phone|land]   # tower screenshots (idle, playing, minimap, Fit, builder)
 node tools/tower-interact.js                 # getting about a tower: Play zooms in + follows, wheel, fling, minimap, edge scroll, keys
 node tools/tower-fit.js                      # the minimap and Follow button fit and clear the HUD at 17 screen sizes
-node tools/tower-perf.js                     # a tower followed at 60 fps on the real-GPU path: draw calls, culling, shadow redraws
+node tools/tower-perf.js [--orbit]           # a tower followed at 60 fps on the real-GPU path: draw calls, culling, shadow redraws; --orbit: Mountain King followed 30 s with a yaw / pitch sweep by hand, without, and with Cinematic: shadow redraws, cascade 0 texel size moving and still, GLR.samples
 node tools/orbit-test.js [--layout ../solver-tower/layouts/ode.json]   # the free camera on the real-GPU path: API, limits, follow + orbit, picking and drags from oblique angles, keys, compass, touch (CDP), Cinematic
+node tools/orbit-fixes.js [--only phone,desk]   # the camera's second-round regressions (also run at the end of orbit-test.js): on a Pixel-5 profile a pinch and a twist never let go of the followed marble, a real slide does, the phone orbit gain, the selection through an orbit, stale pointers, toasts clear of the compass; on a desktop the pitch floor's dead zone, the flick's spin, Cinematic only on a demo, Fit / 0 while following, double-click while following, a pan holds the grabbed point from an angle, a drag over a piece of a playing demo, the follow aim at the combined limits, Reset view at once, reduced motion live
+node tools/look-test.js [--base old-index.html]  # how it looks, measured on the real-GPU path: no hard shadow bars from the window frame, no void in nine zoomed-out views, the light bar in frame, analytic holes (rim <= 2 device px at the zoom limit, parallax down the bore), contact occlusion, crisp mortar, reflections (the hole pitch along a rod; the rod's reflection moves from yaw to yaw >= 3 x the base's; no speckle), mid-tone ties and undersides (whole faces), halo, path fade; (vs --base) comparisons with an older build
 node tools/orbit-shots.js [--layout ...]     # screenshots from the front, 45°, the yaw limit, tilted down, looking up, close up, the hint, the inspector, a phone -> out/orbit
 node tools/merge-shots.js [--out out-merge/shots] [--demo ode]   # the merged scene + camera on the real-GPU path: a shipped tower demo held mid-drop from the front, 45°, both yaw limits, tilted down, looking up, close up (the marble, from below), the whole tower tilted and swung to the limits, pieces from below, the inspector from an angle, the window, a phone
-node tools/merge-test.js                     # the ten tower demos (baked, verified, one marble); a forced check failure -> solved again on a Worker, the page responsive, the progress note, the demo opens itself; a demo that cannot be built; no Workers -> the synchronous solve
+node tools/merge-test.js                     # the ten tower demos (baked, verified, one marble); a forced check failure -> solved again on a Worker, the page responsive, the progress note, the demo opens itself; a demo that cannot be built; no Workers -> the synchronous solve; a solve that never ends (?dev hook) is given up at its deadline and Cancel stops the worker
 node tools/platform-towers.js                # every ../solver-tower/layouts/*.json played through loadLayout: notes, the 6 ms check, the round trip (-> out-merge/platform-report.json)
 NODE_PATH=$(npm root -g) node ../../verify-music.js index.html out-merge   # the harness (all checks pass)
 ```
@@ -61,13 +63,13 @@ SwiftShader is not treated as software GL (slow, but it runs the full-quality co
 | `21b-solver.js` | copy of `../solver-tower/solver.js`: `MarbleSolver`, song -> ONE tall tower (layout + the melody's targets); `hintFrom(layout)` sends a re-solve straight to the round that made a baked tower |
 | `21c-demo-data.js` | copy of `../solver-tower/demo-data.js`: `MARBLE_DEMO_DATA`, every tower solved offline (re-verified at load) |
 | `22-songbook.js` | copy of `../solver-tower/songbook-plugin.js`: registers the songbook with `MarbleDemos` (baked data first, the hinted solve as `build()`) |
-| `23-solver-worker.js` | `SOLVER_WORKER`: solves a song on a Worker built from the page's own script (CANON + the solver between the markers), one job at a time; gives every songbook demo `solveAsync()` |
+| `23-solver-worker.js` | `SOLVER_WORKER`: solves a song on a Worker built from the page's own script (CANON + the solver between the markers), one job at a time, each with a deadline (90 s, 180 s on a phone); gives every songbook demo `solveAsync()` (a promise with `.cancel()`) |
 | `30-glcore.js`, `50-geometry.js` | reused WebGL2 engine: math, GL helpers, MeshBuilder, surface/tube/lathe builders |
-| `40-textures.js` | reused procedural textures (wall, desk, paper, env map) + pegboard, brushed metal, engraved note-letter atlas |
+| `40-textures.js` | reused procedural textures (wall paint, desk, paper, env map) + the pegboard's grain (its holes and the wall's mortar joints are drawn by the shader), brushed metal, engraved note-letter atlas |
 | `55-pieces3d.js` | every piece type as a real 3D mesh in piece-local space (shared per shape; drawn with a per-piece transform), standing off the board on visible hardware (a bar on grommets over a resonator plate with a slot; rails and curves clamped in `bracket`s on foot plates; posts on rubber feet; flanges, clamps, screws), contact occlusion baked into the vertex alpha (`bakeContactAO`) |
-| `60-scene.js` | the room, sized from the board (`boardGeometry`: `DESK_Y`, `TROUGH`, `FIT_BOX`; `roomExtent`), built for a camera that orbits: a thick pegboard in a deep pine frame on steel standoffs off the block wall, the catch tray on wall brackets, one-sided side walls, ceiling (light strips) and desk with the back wall and desk running on beyond them, the window the sun comes through (`buildWindow`), drawing and sticky note |
-| `70-shaders.js` | PBR (per-draw transform, coloured glow, metals mirror the board; material flags 5/6/7: emissive, one-sided room surfaces, with material slot z choosing the clip plane), shadow depth, glass marbles, bloom, grade |
-| `75-render.js` | renderer: init, assets, targets, the free camera (the front-view fit + pan, dolly zoom and orbit: `CAMERA`, `applyCamera`, `project` / `unproject`, `pxPerUnit`; a far plane that reaches the whole room, `ROOM_FAR`), shadows fitted to what the camera sees from any angle, window light, culled instanced draw lists, scene rebuild for a new board size, frame |
+| `60-scene.js` | the room, sized from the board (`boardGeometry`: `DESK_Y`, `TROUGH`, `FIT_BOX`; `roomExtent`), built for a camera that orbits: a thick pegboard in a deep pine frame on steel standoffs off the block wall, the catch tray on wall brackets, one-sided side walls, ceiling (light strips) and desk with the back wall and desk running on beyond them, the window the sun comes through (`buildWindow`), drawing and sticky note, the desk's edge, legs and floor with a pencil pot and a jar, a light bar over the board |
+| `70-shaders.js` | PBR (per-draw transform, coloured glow, metals mirror the real board and chrome the mirror room; the pegboard's holes with parallax, the board's contact occlusion and the wall's mortar are worked out here; material flags 5/6/7: emissive, one-sided room surfaces, with material slot z choosing the clip plane), shadow depth, glass marbles, bloom, grade |
+| `75-render.js` | renderer: init, assets, targets, the free camera (the front-view fit + pan, dolly zoom and orbit: `CAMERA`, `applyCamera`, `project` / `unproject`, `pxPerUnit`; a far plane that reaches the whole room, `ROOM_FAR`), shadows fitted to what the camera sees from any angle, window light, culled instanced draw lists, the board's contact-occlusion map (`updateContact`), scene rebuild for a new board size, frame |
 | `78-overlay.js` | 2D overlay (`#fx`) for both renderers, every mark projected through the real camera (`VIEW.b2s` = `project`): path preview (a point behind the camera breaks the line), beat dots, note labels (only what is in view), selection outline (an ellipse from an angle) + handles, floats, bucket counts, marble halos (phones, towers) |
 | `80-canvas2d.js` | Canvas 2D fallback renderer and the 2D piece drawer (also paints the tray icons) |
 | `85-ui.js` | tray, inspector with the 2-octave piano keyboard, transport, demos gallery, music strip (with the Cinematic toggle), the view compass `#viewCube` (`drawViewCube`, `placeViewCube`), minimap and Follow button (towers), board size choice, save & share, coach, toasts |
@@ -258,7 +260,11 @@ MarbleDemos.removeSource(id);
   `.matchNotes()`, `.status(id)` and `.ready(id)` are public. The Worker (`SOLVER_WORKER`, `23-solver-worker.js`)
   is built from a blob of CANON + the solver cut out of the page's own `<script>` between the marker files (section
   1), so the single file needs no second script; jobs run one at a time (a background pre-build on a phone would
-  otherwise solve ten songs at once). `tools/merge-test.js` forces the failure (corrupting `MARBLE_DEMO_DATA` and
+  otherwise solve ten songs at once). Each job has a deadline (90 s, 180 s on a phone; `?dev`: `window.__mmSolveDeadline`
+  in ms): a worker that hangs or is throttled is terminated and the solve fails as any other ("could not be built on
+  this computer... the other songs are in Demos", the queue free for the next job); the progress note says "still
+  solving" after 30 s; **Cancel** (the note's button) terminates the worker (`MarbleDemos.cancel(id)`: the demo goes
+  back to 'new', not 'failed'; not while `ready(id)` has a waiter). `tools/merge-test.js` forces the failure (corrupting `MARBLE_DEMO_DATA` and
   re-adding the songbook source, which clears the cache) and checks the whole path, and the no-Worker path.
 * **The songbook** (`22-songbook.js`, from `../solver-tower/`) is the one source: the 10 public-domain songs of
   `21a-songs.js`, each solved offline by `21b-solver.js` into ONE TALL TOWER (`21c-demo-data.js`: `board` 800 or 1000
@@ -298,7 +304,7 @@ MarbleDemos.removeSource(id);
 | `paletteRect(type)` | the tray button's DOMRect |
 | extras | `selected`, `select(id)`, `tempo`, `setTempo(bpm)`, `playing`, `MarbleDemos`, `gpu` (also `drawnPieces`, `shadowEpoch`, `shadowExt`); `debugCloseUp(x, y, ...)` with `?dev` |
 | board, view | `board` (`{ w, h, tall, size: 'wide' \| 'tower' \| 'tall' \| 'custom' }`), `setBoard(w, h)` (= the Board choice: undoable, keeps every piece, returns `{ w, h, dx, grew }`), `view` (`{ x, y }` the board point in the middle of the free area, `w, h` the span it shows front-on, `zoom, ppu, following, followPaused, mode }`), `scrollTo(y)`, `resumeFollow()`, `homeView()` |
-| camera | `camera` (`{ yaw, pitch }` in degrees: yaw > 0 = the eye to the right of the board, pitch > 0 = the eye above, looking down; `dist` = the eye's distance from the target in board units; `target: [x, y]` = the board point in the middle of the free area; `following`), `setCamera({ yaw?, pitch?, dist?, target? })` (any of them at once, angles clamped to the limits, `dist` clamped to the zoom range; a `target` pauses the follow camera, `dist` does not; returns `camera`), `resetView()` (the front view of the board as it opened: a Wide board whole, a tower from its top; a run being followed stays followed), `cameraLimits` (`{ yaw: [-75, 75], pitch: [-25, 65], zoom: [min, max] }`). `boardToScreen` / `screenToBoard` go through the real camera (on the marble plane, so a round trip is exact from any angle). In the 2D view the camera stays front-on: `yaw` and `pitch` read 0 and `setCamera` only takes `dist` and `target`. |
+| camera | `camera` (`{ yaw, pitch }` in degrees: yaw > 0 = the eye to the right of the board, pitch > 0 = the eye above, looking down; `dist` = the eye's distance from the target in board units; `target: [x, y]` = the board point in the middle of the free area; `following`), `setCamera({ yaw?, pitch?, dist?, target? })` (any of them at once, angles clamped to the limits, `dist` clamped to the zoom range; a `target` pauses the follow camera, `dist` does not; returns `camera`), `resetView()` (the front view of the board as it opened: a Wide board whole, a tower from its top; a run being followed stays followed; it lands AT ONCE, so `camera` read in the same tick is the front view, where the widget, the Home key and `0` turn to it over 0.5 s), `cameraLimits` (`{ yaw: [-75, 75], pitch: [-25, 65], zoom: [min, max] }`). `boardToScreen` / `screenToBoard` go through the real camera (on the marble plane, so a round trip is exact from any angle). In the 2D view the camera stays front-on: `yaw` and `pitch` read 0 and `setCamera` only takes `dist` and `target`. |
 
 `clear()` also puts the view back (the whole board; a tower from its top); `loadLayout()` shows the load report
 (section 2) in a toast and, when the board's size changes, views it afresh.
@@ -328,22 +334,49 @@ demo plays.
 **The free camera** (3D view; the 2D view stays front-on and a drag pans). The view can be turned, tilted, zoomed and
 panned at ANY time, a run playing included:
 * Orbit: a plain drag on empty board (one finger) turns the view round the TARGET, the board point in the middle of
-  the free area (yaw, about the vertical: a drag across the screen is ~160°) and tilts it (pitch); a quick drag let go
-  spins on a little and settles. Yaw keeps within ±75° and pitch within -25° (looking up) .. +65° (looking down),
-  and the eye never goes below the desk; the last 12 % of each range is eased into (a drag slows down near a limit
-  and never snaps). Alt+arrows turn in 10° steps (Shift: 30°). A two-finger twist (past an 8° dead zone) turns the
-  yaw. The first drag that turns the view shows a one-time toast saying what does what (`.orbitHint`).
-* Pan: Shift-, right- or middle-drag with the mouse (with a fling), two fingers on touch (after 10 px); the board
-  moves with the pointer through the real camera. Zoom is a dolly along the line of sight: the wheel on a Wide board
+  the free area (yaw, about the vertical) and tilts it (pitch). The rate is a fixed angle per pixel however small the
+  screen: 0.9 π / max(1024, screen width) radians, i.e. 0.16° per px on a phone or tablet and 0.127° per px on a 1280 px
+  desktop (a drag across it turns ~160°); tilting uses 0.55 of it (a pitch range is 90°, a yaw range 150°), so a 250 px
+  swipe on a phone tilts ~22°, not to the limit. A quick drag let go spins on a little and settles: the spin speed is
+  capped at 1.5 rad/s, so it travels at most ~19° (decay 4.5 / s; the distance per frame is exact, so it is the same
+  at any frame rate). Yaw keeps within ±75° and pitch within -25° (looking up) .. +65° (looking down), and the eye
+  never goes below the desk (`pitchFloor`; an angle the desk forces up is written back to `CAMERA.pitch`, so the stored
+  pitch is the one on screen); the last 12 % of each range is eased into: a step towards a limit is scaled by the
+  distance still to go (a drag slows down near it and never snaps or passes it), a step away from it is taken in full
+  at once (`softAdd`; a view sitting at a limit answers the first pixel of a drag the other way). Alt+arrows turn in
+  10° steps (Shift: 30°). A two-finger twist (past an 8° dead zone) turns the yaw. The first drag that turns the view
+  shows a one-time toast saying what does what (`.orbitHint`). **Dragging does not drop the selection**: the piece, its
+  outline, handles and the inspector stay through an orbit or a pan; only a plain click or tap on empty board (no
+  movement) deselects (Escape too). **While a demo plays** (not yet your run) a drag that starts on a piece turns the
+  view (a quick drag, 4 px before 250 ms); picking the piece up takes a short hold (250 ms still, then the usual move
+  drag, which makes the demo your run with Undo); a tap on it still selects it. On your own run, and on a stopped
+  demo, a drag on a piece moves it at once.
+* Pan: Shift-, right- or middle-drag with the mouse (with a fling), two fingers on touch; the board point that was
+  under the pointer stays under it from any angle (`panGrab`: each move pans so that the point under the last pointer
+  place comes under the new one, through the real camera; a grab that misses the board, or a wheel, fling or edge
+  scroll, uses `panBy`, which measures at the middle of the view). Two fingers decide "this is a slide" from the NET
+  travel of their midpoint since they came down (16 px), not from the sum of its steps: `pointermove` arrives one
+  finger at a time, so a step is taken only when both fingers have moved (or one twice running, the other resting),
+  from the places both had at the last step; a symmetric pinch or a twist therefore never pans or pauses the follow
+  camera, and only a real slide does. Zoom is a dolly along the line of sight: the wheel on a Wide board
   (a tower's wheel scrolls; Ctrl+wheel and a trackpad pinch zoom), a pinch, + / -, keeping the board point under the
   pointer where it is; from the whole board (zoom 1) down to a close-up where a marble fills about a fifth of the
   screen (`zoomMax`: a view ~100 units tall). Double-click a piece: it is selected and zoomed to (about two thirds
-  of the free area).
+  of the free area); while a marble is followed only the zoom glides (the follow camera is not let go of: the view
+  keeps the marble in frame at the new distance), otherwise it pauses the follow as a pan does.
 * Follow + orbit: while a marble is followed down a tower (section "Towers"), orbiting, tilting and zooming do NOT
   pause the follow camera: the view keeps the marble in frame and swings round it (zooming by hand keeps the new
   distance: `TFOLLOW.userZoom`; zooming about the marble, not the pointer). Panning by hand (a Shift-drag, two
-  fingers, the wheel, the minimap, keys) pauses it as before; `#followBtn` ("Follow the marble") resumes it at the
-  same angle, a new Play too.
+  fingers sliding, the wheel, the minimap, keys) pauses it as before, and so do Fit (F) and 0 (the whole tower is what
+  was asked for; the follow camera would zoom straight back in; the Fit button then reads Run); `#followBtn`
+  ("Follow the marble") resumes it at the same angle and the home zoom (the Fit button reads Fit again), a new Play
+  too. The follow AIM (`followAim`) is worked out front-on (the marble about a third of the way down the free area, the
+  next 1.2 s of its path in view below it) and then corrected in screen space (`aimInScreen`): from a combined yaw
+  and pitch at the limits the board is foreshortened and the far end of the marble plane rises up the screen, so the
+  aim is slid along the board until the marble is within 25-45 % of the free area's height, its look-ahead point
+  within 85 % and the marble below 20 %; the correction grows from nothing at the edge of those bands (a front-on
+  view needs none), and the spring smooths it. Measured through the real camera: at yaw ±70 with pitch 65 and -25
+  the marble stays at 25-55 % and its look-ahead at most 85 % (it was 77 % and 89 %).
 * The view compass `#viewCube` (bottom right of the free area; to the left of a desktop inspector that reaches down
   to it; hidden in the 2D view and under a phone's inspector sheet): a small picture of the pegboard on its wall
   drawn from the camera's own angle, the angle written under it ("front", or "35° ▾20°"). Drag on it to orbit (2.2°
@@ -351,8 +384,17 @@ panned at ANY time, a run playing included:
   view. Fit (F), 0, Reset view (`resetView`) and a new board all go back to the front view (`CAMERA.yaw0 / pitch0`,
   a 0.5 s glide).
 * Cinematic (`#cineBtn` in the demo strip, off by default, remembered in `.cinematic`, hidden in the 2D view): while a
-  run plays the view swings slowly on its own (a 30 s sine of ±19° yaw and a little pitch, fading in over 2.5 s and out
-  over 0.7 s when the run ends), on top of anything the user does; a drag in progress holds it.
+  demo's run plays the view swings slowly on its own (a 30 s sine of ±19° yaw and a little pitch, fading in over 2.5 s
+  and out over 0.7 s when the run ends), on top of anything the user does; a drag in progress holds it. It is a
+  DEMO-STRIP preference: a remembered '1' does not swing the builder's own run (whose strip, and so whose toggle, is
+  hidden; a Remix keeps its demo's strip and keeps swinging). With reduced motion on, the toggle is inert and says so
+  (`aria-disabled`, title "Off: reduced motion is on"; the stored preference comes back when it goes off); the OS
+  setting is followed live (`RM_QUERY`), so the swing, the spin and the glides stop and start with it.
+* Pointers that are gone without a pointerup (capture lost, the window blurred or hidden, the canvas replaced when the
+  2D fallback takes over, a finger that has not moved for 3 s when another comes down) are let go of (`clearPointers`),
+  so one lost pointerup cannot turn every next finger into half a pinch.
+* A toast sits above the view compass (a 56 px square in the free area's bottom right corner) on phones, never on
+  top of it, the strip, the tray or the minimap.
 * Everything drawn on top projects through the camera: the path preview and beat rings, note labels, the selection
   outline (an ellipse from an angle) and handles, floats, bucket counts, halos; picking casts the pointer onto the
   marble plane (z = `ZM`, where every piece's metal is centred), so a tap selects and a drag moves a piece exactly
@@ -379,7 +421,7 @@ rest; the aim keeps the marble about a third of the way down the free area and t
 over the next 1.2 s in view (up to 85 % down); between marbles (a hold) it goes on to the dropper that releases next;
 a jump of more than a screen glides (0.8 s, eased, zooming in to the home zoom when the view is further out).
 Scrolling, sliding the board or using the minimap pauses it (orbiting, tilting and zooming do not); `#followBtn`
-("Follow the marble", beside the minimap) resumes it, and so does a new Play. Marbles on a tower have a soft halo. Board size: Save & share > Board (Wide,
+("Follow the marble", beside the minimap) resumes it, and so does a new Play. Marbles on a tower have a faint halo (a ring of radius 1.6 R, peak alpha 0.4, full below a 28 px marble and gone at 44 px: at the follow zoom the glass is what to look at). The 2D path preview, beat rings, note labels and look-ahead are painted over pieces nearer the eye than the marble plane (they have no depth), so while a run plays they fade out between 4 x and 6 x the home zoom (`pathFade`) and are gone at the zoom limit; building (no session) keeps them at full strength. Board size: Save & share > Board (Wide,
 Tower, Tall tower, with pictures; `resizeBoard`, section 2). Transport: Play/Stop
 (Space), Drop one (D), tempo (a song's own tempo map is read-only), metronome. Every button has a title; the board
 is focusable and the inspector keeps keyboard focus as it updates.
@@ -394,7 +436,7 @@ step down to the board, its back and the rebate behind the board), hanging on st
 (`TROUGH.z0` its back wall just in front of the frame's face, `z1` its lip; floor, end caps, rolled top edges, felt)
 on galvanised L-brackets with a diagonal brace from the wall. Every piece stands off the board on visible hardware:
 bars on grommet posts over a satin resonator plate with a recessed dark slot below the bar (screwed to the board);
-twin-rod rails and curves clamped in a row of `bracket`s (a tie in the note's colour standing on the board on a satin
+twin-rod rails and curves clamped in a row of `bracket`s (a tie in the note's colour, satin nickel for a silent rail, standing on the board on a satin
 steel foot plate with two chrome screws; radial on a curve); springs, walls and funnels on posts with rubber feet;
 domes on a base flange; droppers on clamp brackets; pails screwed through their backs. `bakeContactAO` darkens the
 vertex AO of everything within 9 units of the board face, so the ambient light drops where a piece touches the board.
@@ -405,7 +447,10 @@ piece's metal is still centred on z = `ZM`, the plane picking casts onto (sectio
 **The room** (`roomExtent`) is a box the camera can leave without seeing its edges: the block wall behind, block side
 walls at `x0 / x1` (1.2 board-heights, 1.6 board-widths, at least 3000 units out), a plaster ceiling at `top` (3.5
 board-heights, at least 5000, above the board's top; higher when the window needs it) with fluorescent strips
-(emissive, flag 7: they bloom), and the desk, all `z1` deep (6 board-heights, at least 16000) in front of the wall.
+(emissive, flag 7: they bloom), and the desk, the room `z1` deep (6 board-heights, at least 16000) in front of the wall; the desk top runs from the wall to `DESK_EDGE` (z = 1800), where its 70-unit front edge shows the slab's thickness,
+legs every 2400 units stand 760 units to the floor (`DESK_LEG`; 1 unit is about 1 mm), and the floor (the desk's wood in a grey tint, one-sided like the desk, running out to the room's far end) catches what the desk no longer covers; a steel
+pencil pot with pencils and a jar of marbles' green glass with a brass lid stand beside the tray, and a fluorescent LIGHT BAR (emissive, so it blooms; a housing in the window frame's material) hangs on the wall 130 units above the board's
+top, behind the board's plane, so that the sunlight and the bloom have a source in sight wherever the camera is near the top of the tower (the ceiling is 16000 units up and the window 5000 away) and it neither shades nor hides the board.
 The side walls, the ceiling, its strips and the desk are **one-sided** (material flag 6/7): the vertex shader clips
 them when the eye is behind their plane, and the back wall and the desk run on `beyond` (a room's width) past the
 side walls, the wall from above the ceiling (`wallTop`) down to a floor line (`floor`, 3 board-heights) below the
@@ -422,13 +467,52 @@ across it, the bright rectangle in the metal's reflections (`envRadiance`) and t
 one-sided with its wall: material slot z (`aMat.z`, unused before) picks a one-sided surface's clip plane (0 its own
 normal, 1 +x, 2 -x, 3 -y, 4 +y); `uCamPos` is set for every program (the shadow pass too), so the clip is the same
 in every pass. Far room surfaces (flag 6/7) get extra bounced daylight in the shader, the down-facing ones (the
-ceiling) the sunlit desk's warm bounce. Side walls and ceiling use the `wall` material, so `isRoomCaster` leaves them
-out of the shadow maps and the ceiling never shadows the board; the standoffs, tray brackets and window frame are
+ceiling) the sunlit desk's warm bounce. Side walls and ceiling use the `wall` material, the desk and its kit the `desk`
+material and the window's frame its own `window` key (drawn with the `misc` textures: `bindMat` falls back to them), so
+`isRoomCaster` leaves all of them out of the shadow maps: the ceiling never shadows the board, and the window frame, which
+stands thousands of units in front of the wall when the view is zoomed out and fell inside cascade 1's range, no longer
+paints hard black bars across the wall and desk that disagreed with the analytic window cookie (`windowCookie`: the
+window's own shadow, mullion included, on the board and the room); the standoffs, tray brackets and the trough are
 casters (cascade 1 reaches from `WALL_Z` out to 160). The environment reflections, the sun's highlights and the
 marble's refraction are all evaluated from `uCamPos` / `uViewProj`, so they slide as the camera orbits. The room's
 extra surfaces and the pieces' brackets are part of the same meshes: no extra draw calls. `tools/merge-shots.js`
 (real-GPU path) photographs a shipped tower demo held mid-drop from the front, 45°, both yaw limits, tilted down,
 looking up and close up, the whole tower tilted and swung to the limits, every piece from below, the window.
+
+**Looking closely** (`70-shaders.js`, `FS_PBR`; the textures are only paint and grain). *The pegboard's holes* (`uPeg`)
+are drawn from the position: the distance to the nearest of the 20-unit grid's centres, 3.7 units in radius, anti-aliased
+with the exact pixel footprint (the rim goes from board to hole in <= 2 device px at the zoom limit on a DPR 2 screen,
+where the old 3 px per unit texture stair-stepped), a darker bevel and an occlusion ring round each; inside a hole the
+ray from the eye is traced into the 9-unit bore: it meets the bore's wall (shaded: the sun where its way out of the hole
+stays inside the bore, the SH ambient dimmer the deeper it is) or leaves by the open back (the dim gap), so a hole seen
+from an angle shows its lit far wall, not a flat ellipse. The depth pass still draws a flat quad. *Contact occlusion*:
+`updateContact` keeps an R8 map in board space (1 texel = 4 units: 205 x 1175 for an 800 x 4680 tower, 4 MB at
+4000 x 16000) darkened by up to 45 % round every piece's footprint (its colliders widened by the plate or feet it stands
+on, a dropper's tube, a pail's back) and looked up by the pegboard's ambient light (and, at 0.6 of its strength, its direct light: next to a plate the board sees less of the sun's disc too), so plates and feet meet the board
+with a soft shadow on every side; it is rebuilt only in the dirty rectangle of a piece added, moved, changed or removed,
+leaving the piece being dragged (`EDIT.lifted`) out, so a drag costs nothing (a 200-piece 4000 x 16000 board: under
+0.5 ms to move one piece). *The block wall* (`uWall`): the mortar joints (500 x 250 blocks, 11 units wide, odd courses
+shifted half a block) are drawn from the position with per-axis exact anti-aliasing (a mortar tone 0.8 of the paint and
+rougher, a 6-unit occlusion dip and a tilt of the block's edge into each joint, running on across the corner into the side
+walls; far away, where a pixel is wider than a joint, they average out to their mean) and a fine detail normal layer
+(the 64 px `misc` surface tile at 1 / 24 per unit, 0.35); the wall texture, at 0.26 px per unit, is only paint. *Mirrors*: the cube's RGB is the pale daylit room every matt, satin and anodised metal was tuned against (pale walls, a sunlit
+desk round the viewer, a bright wall behind them, ceiling light strips; reflection only: the SH leaves them out, so the board
+keeps its tone). Its alpha is the luminance of a second room, the one chrome and glass (rough < 0.06 .. 0.2) see: dim walls
+(`RM.wall`, `RM.desk`) with bright, soft-edged lights (`RM.feats`: a whiteboard column behind the viewer, a window left and a door
+right, the sunlit desk in between; wider ceiling strips of the same energy), fading back to the pale room as the blur grows. The
+shader gives the pale room's colour that luminance (`envMirror`: a tint and a level, so no hairline of one room leaks into the
+other), so a rod turns from bright to dark chrome with streaks as the view orbits (the sum of three yaw pairs' mean luminance
+change over its surface is >= 3 x the earlier build's); `envRough` widens the cube level to the angle one pixel's reflection
+sweeps (specular anti-aliasing of thin rods). A piece on the board mirrors the real board where its reflected ray goes into it
+(a mirror wherever R.z < 0, any other piece up to half): the ray's hit `bp` on the board's plane, its grain (the pixel's footprint
+on the board, widened to >= 6 units: no beading), the hole pattern there from `uPegHole` (one 20-unit cell, R8, mipmapped and
+anisotropic: the GPU averages it along the long side of the pixel's footprint, so the holes keep their pitch along a rod, a soft
+dash about every 20 units near its edges, and smear across it; a mirror draws them 1.8 x bolder than their average), the sun patch
+(`windowCookie` at `bp`) and the plates' contact shade; the pattern fades at the silhouette and at a grazing reflection, and the
+wall shows beyond the board's edge. A face under an overhang is brightened by the bounces below it. A silent rail's ties are satin
+nickel (`FIN.nickel`: metalness 0.05, a matt coat that takes the sun and the bounced light of the desk and board: mid-grey from
+below, near the foot plate's tone), noted ones stay anodised in their colour. The soft shadows' blocker search spreads its taps
+evenly in radius (a thin occluder beside the pixel is always found: no lit dots in its shadow) and the filter's two tails are cut.
 
 **Any board size**: the pegboard (a vertex every ~50 units, its tone noise repeating only every 12800), frame, trough,
 desk and walls are built from the board (`boardGeometry`, `roomExtent`, above) and rebuilt when its size
@@ -443,7 +527,16 @@ a 10000-unit tower's shadows are as sharp as a small board's and do not shimmer 
 what the camera sees FROM ITS CURRENT ANGLE (`visibleBoardRect`: the canvas's corners and edge midpoints cast onto
 the board face, each kept within three front-on spans of the target, since from a steep angle the far rays land a
 long way off or miss); cascade 0, the sharp one, keeps to 1.6 spans round the target and cascade 1 covers the rest,
-so a tilted view stays sharp where the eye is and cheap. **The camera** (`fitCamera`, `applyCamera`): the FIT frames
+so a tilted view stays sharp where the eye is and cheap. While the camera is turned by hand (an orbit or pinch in
+progress, a glide, the spin after a flick, the Cinematic swing, a fling: `cameraMoving`) the visible region changes its
+shape every frame and refitting at each change redrew the maps 71 times in 30 s of orbiting (7 following), so then the
+region takes a margin of 0.8 of the view and the union of the last ten visible rects (cascade 0 keeps to 1.5 spans round
+the target instead of 1.6, so its texel stays within 2 x the still one), a region that is LEFT is still refitted at once
+(coverage never lapses) but one that has merely become too big waits until the camera has been still for 300 ms (or 18
+frames; `SHMOVE`), and a jump of the view (a new board, Fit) forgets the rects before it. Measured by `tools/tower-perf.js
+--orbit` (Mountain King followed 30 s at 60 fps, a yaw sweep of ±70° over 12 s and a pitch sweep of -20..50° over 7 s by
+hand): the maps are redrawn 0 times while orbiting by hand (6 following without orbiting, 0 with Cinematic), cascade 0's
+texel back to its still size as soon as the motion has stopped. **The camera** (`fitCamera`, `applyCamera`): the FIT frames
 the whole board (`FIT_BOX`) in the free area from the front view (`CAMERA.yaw0 / pitch0`: 4° to the right, 5.7°
 above; a lens shift keeps the camera level while the board sits off-centre); on top of it the user's pan moves the
 target along the marble plane, the zoom is a dolly (distance = `FIT.D / zoom`) and the orbit swings the eye round
@@ -457,15 +550,18 @@ scrolling never waits for them. The Canvas 2D view paints only the holes, desk a
 real-GPU path (`tools/tower-perf.js`, 960 x 600, the 6000-unit synthetic tower followed for 40 s at 60 fps): 42 draw
 calls a frame (109 when the shadow maps are redrawn), the shadow maps redrawn 6 times in the 40 s, 44 of its 94
 pieces drawn, 0.3 ms of CPU a frame for the GL work; the marble stayed 18-39 % of the way down the free area
-(measured on the merged build, `out-merge/tower-perf.txt`; a front-on follow: an orbit in progress changes the
-visible region's shape, so `updateShadowRegion` can redraw the maps more often than that).
+(measured on the merged build, `out-merge/tower-perf.txt`; now 5 redraws, 43 draw calls a frame (101 on a redraw), 0.3-0.4 ms of
+CPU: the window frame is one more draw call in the room, but out of the shadow passes). The render targets: adaptive
+quality steps the resolution scale under one canvas size, and the sets of targets of every earlier size used to be kept
+(+31 MB on a desktop, +25 MB on a DPR 2 phone): now the current set and one spare, the next larger (the way back up), are
+kept (`glTargets`), at most 2 sets through all six quality steps down and up.
 
 WebGL2: the reused PBR engine (PCSS soft shadows in two cascades, window-light cookie, SH + prefiltered env, glass
 marbles refracting the scene, bloom, ACES grade, FXAA/MSAA, adaptive quality, context-loss recovery). The room the
-metal reflects: pale walls and a sunlit desk round the viewer, a bright wall behind them and a ceiling light strip
-(reflection only: the SH irradiance leaves them out, so the board keeps its tone); a piece on the board mirrors the
-board behind it at up to 50 %. Finishes: anodised aluminium (metalness 1, the note colour lifted 15 % towards white in
-sRGB), brass (#e3c27a), satin steel. The window light falls as a patch, brightest up on the left. MSAA up to 128 MB of
+metal reflects: pale walls and a sunlit desk round the viewer, a bright wall behind them and ceiling light strips, and for chrome
+a dim room with bright lights (reflection only: the SH irradiance leaves them out, so the board keeps its tone); a piece on the
+board mirrors the board behind it (see Mirrors). Finishes: anodised aluminium (metalness 1, the note colour lifted 15 % towards white in
+sRGB), brass (#e3c27a), satin steel, satin nickel. The window light falls as a patch, brightest up on the left. MSAA up to 128 MB of
 target on desktops (4x, then 2x, then none; phones none); without MSAA, FXAA runs only next to geometry (the scene's
 alpha marks it), so the pegboard's texture holes stay round. Adaptive quality estimates the display's refresh interval
 (10th percentile of the last 120 frames), steps down when 40 frames average over 1.25x it, and back up after 5 s at

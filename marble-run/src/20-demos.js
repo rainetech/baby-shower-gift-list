@@ -85,7 +85,7 @@ const MarbleDemos = (() => {
   // A background solve: when it lands, the result is verified and cached like any other (a solve that is no
   // better, or fails, keeps the baked data, flagged); whoever waits (ready(), onDemoStatus) is told
   function startPending(id, def, promise, dataRes, dataReport) {
-    const entry = { t0: Date.now(), why: dataRes ? 'the baked tower plays differently here: ' + JSON.stringify(dataReport.firstMisses) : 'no baked data' };
+    const entry = { t0: Date.now(), promise, why: dataRes ? 'the baked tower plays differently here: ' + JSON.stringify(dataReport.firstMisses) : 'no baked data' };
     console.warn('demo ' + id + ': ' + entry.why + '; solving it in the background');
     pending.set(id, entry);
     const done = (res, report, source) => {
@@ -107,6 +107,15 @@ const MarbleDemos = (() => {
       console.warn('demo ' + id + ' could not be solved here: ' + (e && e.message));
       if (dataRes) done(dataRes, dataReport, 'data'); else done(null, null, 'solved');
     });
+  }
+  // Stop solving a demo in the background (the user pressed Cancel): the worker is stopped and the demo goes back to
+  // 'new' (not 'failed': it may be asked for again). Not while someone else (ready()) is waiting for it.
+  function cancel(id) {
+    const entry = pending.get(id);
+    if (!entry || (waiters.get(id) || []).length) return false;
+    pending.delete(id);
+    try { if (entry.promise && entry.promise.cancel) entry.promise.cancel(); } catch (e) { /* gone */ }
+    return true;
   }
   // Where a demo stands: { state: 'ready' | 'solving' | 'failed' | 'new' | 'unknown', ... }
   function status(id) {
@@ -156,6 +165,6 @@ const MarbleDemos = (() => {
     const extras = played.filter((p, i) => !used[i]).map((p) => ({ t: p.t, note: p.note }));
     return { ok: !misses.length && !extras.length, matched, targets: targets.length, extras: extras.length, maxErr, firstMisses: misses.slice(0, 4), firstExtras: extras.slice(0, 4), pair };
   }
-  return { addSource, removeSource, list, get, build, cached, status, ready, verify, matchNotes, get sources() { return sources.slice(); } };
+  return { addSource, removeSource, list, get, build, cached, status, ready, cancel, verify, matchNotes, get sources() { return sources.slice(); } };
 })();
 if (typeof window !== 'undefined') window.MarbleDemos = MarbleDemos;

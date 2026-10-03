@@ -93,6 +93,7 @@ function useCanvas2D() {
   rendererName = 'canvas2d';
   if (GLR.gl) {
     try { const lc = GLR.gl.getExtension('WEBGL_lose_context'); if (lc && !GLR.gl.isContextLost()) lc.loseContext(); } catch (e) { /* gone */ }
+    clearPointers();                                // (a gesture under the old canvas can no longer end)
     const fresh = stage.cloneNode(false);
     fresh.__inputAttached = false;
     stage.replaceWith(fresh); stage = fresh;
@@ -369,7 +370,7 @@ window.marbleMusic = {
   // opened (a run being followed stays followed)
   get camera() { return cameraState(); },
   setCamera(o) { return setCameraState(o); },
-  resetView() { resetView(); return cameraState(); },
+  resetView() { resetView(0); return cameraState(); },
   get cameraLimits() { return { yaw: [-CAMERA.yawMax / RAD, CAMERA.yawMax / RAD], pitch: [CAMERA.pitchMin / RAD, CAMERA.pitchMax / RAD], zoom: [ZOOM_MIN, zoomMax()] }; },
   debugCloseUp: DEV ? (...a) => debugCloseUp(...a) : undefined,
 };

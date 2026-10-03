@@ -55,6 +55,7 @@ function initGL(canvas) {
   if (!compilePrograms()) return false;
   GLR.sphere = buildSphereMesh(gl);
   INST.tex = null; INST.rows = 0;
+  CONTACT.tex = null; CONTACT.key = '';                     // (a fresh GL context: the contact map is made again)
   GLR.quadVao = gl.createVertexArray();
   GLR.shadow = [glShadowTarget(gl, GLR.shadowSize), glShadowTarget(gl, GLR.shadowSize)];
   GLR.cmpSampler = gl.createSampler();
@@ -143,6 +144,7 @@ async function buildGLAssets(onProgress) {
   if (!(await run('env', () => genEnvironment(gl, envOut)))) return false;
   GLR.env = envOut.env;
   step();
+  if (!(await run('holes', () => { GLR.pegHole = genPegHoleTile(gl); }))) return false;
   SCENE.builders = {};
   const board = BOARD_W + 'x' + BOARD_H;
   if (!(await run('scene', buildScene))) return false;
@@ -241,6 +243,13 @@ function glTargets(w, h) {
   const key = w + 'x' + h;
   let t = TARGET_CACHE.get(key);
   if (!t) { t = makeTargets(w, h); if (t) TARGET_CACHE.set(key, t); }
+  if (!t) return t;
+  // Adaptive quality steps the render scale under one canvas size, which used to keep every earlier (bigger) set
+  // (+31 MB on a desktop, +25 MB on a DPR 2 phone): keep the current set and one spare, the next larger one (the way
+  // back up when the frame rate recovers), and free the rest
+  let spare = null;
+  for (const [k, o] of TARGET_CACHE) if (k !== key && o.w >= w && o.h >= h && (!spare || o.w * o.h < spare[1].w * spare[1].h)) spare = [k, o];
+  for (const [k, o] of [...TARGET_CACHE]) if (k !== key && !(spare && spare[0] === k)) { freeTargets(o); TARGET_CACHE.delete(k); }
   return t;
 }
 function makeTargets(w, h) {
@@ -399,7 +408,7 @@ function layout3D() {
   FIT = fitCamera(view.w, view.h, boardFitRect());
   applyCamera();
   resizeCanvases();
-  SHADOW.view = null;
+  SHADOW.view = null; SHMOVE.hist.length = 0;
   updateShadowRegion();
   setupWindowLight();
   GLR.layoutEpoch++;
@@ -410,7 +419,10 @@ function applyCamera() {
   if (!FIT) return;
   const z = VIEWCAM.zoom, D = FIT.D / z, tg = [FIT.target[0] + VIEWCAM.panX, FIT.target[1] - VIEWCAM.panY, FIT.target[2]];
   const yaw = clamp(CAMERA.yaw + CAMERA.autoYaw, -CAMERA.yawMax, CAMERA.yawMax);
-  const pitch = clamp(CAMERA.pitch + CAMERA.autoPitch, pitchFloor(tg[1], D), CAMERA.pitchMax);
+  const floor = pitchFloor(tg[1], D), pitch = clamp(CAMERA.pitch + CAMERA.autoPitch, floor, CAMERA.pitchMax);
+  // (a pitch the desk forces up is written back: the stored angle is the one on screen, so a drag or a key press
+  //  tilts from where the view is, not from an angle the floor hid; withFrontCam puts its own values back)
+  if (CAMERA.pitch + CAMERA.autoPitch < floor) CAMERA.pitch = pitch - CAMERA.autoPitch;
   const c = FIT.build(D, FIT.sx, FIT.sy, tg, camDir(yaw, pitch));
   GLR.cam = { eye: c.eye, target: tg, view: c.viewM, proj: c.proj, vp: c.vp, inv: M4.invert(c.vp), D, fovY: FIT.fovY, yaw, pitch };
   VIEWCAM.version++;
@@ -483,15 +495,38 @@ function visibleBoardRect() {
 // Fit the cascades to the view when it has left the region they cover (or zoomed well in); true when they moved.
 // From an oblique angle the visible region grows; cascade 0 (the sharp one) keeps to 1.6 spans round the target and
 // the wider cascade 1 covers the rest, so a tilted view stays sharp where the eye is and cheap.
+// While the view is being turned by hand (an orbit, a glide, a spin, the Cinematic swing) the visible region changes
+// its shape every frame, and refitting at every small change redrew the maps 71 times in 30 s of orbiting (7 for a
+// follow): so while the camera moves the region takes a wider margin (0.8 of the view) and the union of the last ten
+// visible rects, a region that is left is still refitted at once (coverage never lapses) but a region that has merely
+// become too big waits until the camera has been still for 300 ms (SHMOVE).
+const SHMOVE = { t: -1e9, still: 0, hist: [], pending: false, margin: 0.8, reach: 1.5 };
 function updateShadowRegion() {
   if (!GLR.cam.inv || !view.w) return false;
-  const v = visibleBoardRect(), size = Math.max(v.x1 - v.x0, v.y1 - v.y0), R = SHADOW.view;
-  if (R && v.x0 >= R.x0 && v.x1 <= R.x1 && v.y0 >= R.y0 && v.y1 <= R.y1 && size > 0.6 * R.size) return false;
-  const m = Math.min(v.y1 - v.y0, v.sh) * 0.3 + 60, r = { x0: v.x0 - m, x1: v.x1 + m, y0: v.y0 - m, y1: v.y1 + m, size };
+  let v = visibleBoardRect();
+  const R = SHADOW.view, now = performance.now(), moving = cameraMoving();
+  if (moving) { SHMOVE.t = now; SHMOVE.still = 0; } else SHMOVE.still++;
+  const hist = SHMOVE.hist;
+  let size = Math.max(v.x1 - v.x0, v.y1 - v.y0);
+  const last = hist[hist.length - 1];
+  // (a jump of the view, a new board or a Fit, is not a motion to cover: forget the rects before it)
+  if (last) { const ls = Math.max(last.x1 - last.x0, last.y1 - last.y0); if (Math.abs(v.cx - last.cx) + Math.abs(v.cy - last.cy) > 0.5 * Math.max(v.sw, v.sh) || size > 2.2 * ls || size < ls / 2.2) hist.length = 0; }
+  hist.push(v); if (hist.length > 10) hist.shift();
+  const inside = !!R && v.x0 >= R.x0 && v.x1 <= R.x1 && v.y0 >= R.y0 && v.y1 <= R.y1;
+  SHMOVE.pending = false;
+  if (inside && size > 0.6 * R.size) return false;
+  // (too big, but the camera has only just stopped: still for 300 ms, or 18 frames, whichever comes first)
+  if (inside && SHMOVE.still < 18 && (now - SHMOVE.t < 300 || SHMOVE.still < 2)) { SHMOVE.pending = true; return false; }
+  if (moving) {
+    v = Object.assign({}, v);
+    for (const h of hist) { v.x0 = Math.min(v.x0, h.x0); v.x1 = Math.max(v.x1, h.x1); v.y0 = Math.min(v.y0, h.y0); v.y1 = Math.max(v.y1, h.y1); }
+    size = Math.max(v.x1 - v.x0, v.y1 - v.y0);
+  } else hist.length = 0;
+  const m = Math.min(v.y1 - v.y0, v.sh) * (moving ? SHMOVE.margin : 0.3) + 60, r = { x0: v.x0 - m, x1: v.x1 + m, y0: v.y0 - m, y1: v.y1 + m, size };
   SHADOW.view = r;
   SHADOW.cull = { x0: r.x0 - 120, x1: r.x1 + 120, y0: r.y0 - 120, y1: r.y1 + 120 };
   // cascade 0: the pegboard, its frame and the trough, where they are in the region (quantised sizes: see above)
-  const kx = 1.6 * v.sw, ky = 1.6 * v.sh;
+  const kk = moving ? SHMOVE.reach : 1.6, kx = kk * v.sw, ky = kk * v.sh;       // (a little tighter while the camera moves: the texel stays within 2 x the still one)
   const b0x0 = clamp(Math.max(r.x0, v.cx - kx), -60, BOARD_W + 60), b0x1 = clamp(Math.min(r.x1, v.cx + kx), -60, BOARD_W + 60);
   const b0y0 = clamp(Math.max(r.y0, v.cy - ky), -60, TROUGH.y1 + 20), b0y1 = clamp(Math.min(r.y1, v.cy + ky), -60, TROUGH.y1 + 20);
   GLR.sf0 = lightFrustum(boxPts(b0x0, Math.max(b0x1, b0x0 + 1), -b0y0, -Math.max(b0y1, b0y0 + 1), -8, 80), 64);
@@ -519,7 +554,7 @@ function setupWindowLight() {
 const SUN_COL = [4.1, 3.8, 3.3];
 const LIGHT_TAN = 0.1;
 const EXPOSURE = 1.18;
-const BOARD_REFL = [0.32, 0.26, 0.19];
+const BOARD_REFL = [0.45, 0.34, 0.22];
 let MARBLE_DATA = new Float32Array(0), MARBLE_COL = new Float32Array(0);   // the shadow casters (sized in initGL)
 const MARBLE_COLORS = [
   { glass: '#4f9be8', swirl: '#ff7a2e' }, { glass: '#e24a4a', swirl: '#ffe066' }, { glass: '#3fbf7f', swirl: '#ffffff' },
@@ -744,6 +779,98 @@ function frameInstances() {
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, rows, gl.RGBA, gl.FLOAT, D, 0);
 }
 
+/* ---- Contact occlusion on the pegboard ----
+ *  Where a plate, foot or tube meets the board the ambient light is darker all round it, not only under it (the sun's
+ *  own shadow is the PCSS one, offset down and to the right): a soft board-space map, 1 texel = 4 board units (R8,
+ *  e.g. 205 x 1175 for a 800 x 4680 tower, 4 MB at 4000 x 16000), looked up by the pegboard's shader. Every piece's
+ *  footprint (its colliders widened by the hardware it stands on) is splatted as 1 - 0.45 * smoothstep(R + 7, R - 1,
+ *  distance). It is updated only where a piece was added, moved, changed or removed (a dirty rectangle: the new and old
+ *  footprints), and the piece being dragged (EDIT.lifted) is left out, so a drag costs nothing and does not smear. */
+const CONTACT = { tex: null, tw: 0, th: 0, data: null, ents: new Map(), key: '', ver: -1, lifted: null, info: new Float32Array(4) };
+const CONTACT_PX = 4, CONTACT_DARK = 0.45;
+const CONTACT_FOOT = { bar: 8, rail: 3, curve: 3, wall: 3, spring: 5, funnel: 4 };     // how far the plate or feet reach past the collider
+// A piece's footprint on the board: capsules { ax, ay, bx, by, R } (board units; a circle has a = b)
+function contactShapes(p) {
+  if (p.type === 'dropper') return [{ ax: p.x, ay: p.y - 70, bx: p.x, by: p.y - 18, R: 13 }];
+  if (p.type === 'bucket') { const a = (p.rot || 0) * RAD, c = Math.cos(a) * 8, s = Math.sin(a) * 8; return [{ ax: p.x - c, ay: p.y - s, bx: p.x + c, by: p.y + s, R: 30 }]; }
+  const foot = CONTACT_FOOT[p.type] || 3, out = [];
+  for (const c of CANON.colliders(p)) {
+    if (c.shape === 'circle') out.push({ ax: c.x, ay: c.y, bx: c.x, by: c.y, R: c.r + 4.5 });
+    else out.push({ ax: c.ax, ay: c.ay, bx: c.bx, by: c.by, R: c.hw + foot });
+  }
+  return out;
+}
+const contactSame = (e, p) => e.type === p.type && e.x === p.x && e.y === p.y && e.rot === p.rot && e.len === p.len && e.r === p.r && e.sweep === p.sweep && e.w === p.w && e.h === p.h;
+function contactBox(shapes) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const q of shapes) { const m = q.R + 8; x0 = Math.min(x0, q.ax - m, q.bx - m); y0 = Math.min(y0, q.ay - m, q.by - m); x1 = Math.max(x1, q.ax + m, q.bx + m); y1 = Math.max(y1, q.ay + m, q.by + m); }
+  return shapes.length ? [x0, y0, x1, y1] : null;
+}
+function updateContact() {
+  const gl = GLR.gl, C = CONTACT, tw = Math.ceil((BOARD_W + 2 * BOARD_PAD) / CONTACT_PX), th = Math.ceil((BOARD_H + 2 * BOARD_PAD) / CONTACT_PX), key = tw + 'x' + th;
+  if (C.tex && C.key === key && C.ver === MODEL.version && C.lifted === EDIT.lifted) return;
+  let dirty = null;                                               // texel rectangle [x0, y0, x1, y1] to rebuild
+  const add = (b) => {
+    if (!b) return;
+    const r = [Math.max(0, Math.floor((b[0] + BOARD_PAD) / CONTACT_PX)), Math.max(0, Math.floor((b[1] + BOARD_PAD) / CONTACT_PX)), Math.min(tw - 1, Math.floor((b[2] + BOARD_PAD) / CONTACT_PX)), Math.min(th - 1, Math.floor((b[3] + BOARD_PAD) / CONTACT_PX))];
+    if (r[2] < r[0] || r[3] < r[1]) return;
+    if (!dirty) dirty = r; else { dirty[0] = Math.min(dirty[0], r[0]); dirty[1] = Math.min(dirty[1], r[1]); dirty[2] = Math.max(dirty[2], r[2]); dirty[3] = Math.max(dirty[3], r[3]); }
+  };
+  if (!C.tex || C.key !== key) {                                  // (first time, a new board size, a new GL context)
+    if (C.tex && gl.isTexture(C.tex)) gl.deleteTexture(C.tex);
+    C.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, C.tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R8, tw, th);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    C.data = new Uint8Array(tw * th).fill(255); C.ents = new Map(); C.key = key; C.tw = tw; C.th = th;
+    C.info.set([BOARD_PAD, BOARD_PAD, 1 / (tw * CONTACT_PX), 1 / (th * CONTACT_PX)]);
+    dirty = [0, 0, tw - 1, th - 1];
+  }
+  // what changed: pieces added, moved or altered, taken away, picked up or put down (old and new footprints)
+  const cur = new Map();
+  for (const p of MODEL.pieces) {
+    const lifted = EDIT.lifted === p.id, old = C.ents.get(p.id);
+    if (old && old.lifted === lifted && (lifted || contactSame(old, p))) { cur.set(p.id, old); continue; }
+    const shapes = lifted ? [] : contactShapes(p), e = { lifted, shapes, box: contactBox(shapes), type: p.type, x: p.x, y: p.y, rot: p.rot, len: p.len, r: p.r, sweep: p.sweep, w: p.w, h: p.h };
+    cur.set(p.id, e);
+    if (old) add(old.box);
+    add(e.box);
+  }
+  for (const [id, old] of C.ents) if (!cur.has(id)) add(old.box);
+  C.ents = cur; C.ver = MODEL.version; C.lifted = EDIT.lifted;
+  if (!dirty) return;
+  const [x0, y0, x1, y1] = dirty, D = C.data;
+  for (let y = y0; y <= y1; y++) D.fill(255, y * tw + x0, y * tw + x1 + 1);
+  for (const e of cur.values()) {
+    if (!e.box) continue;
+    const bx0 = Math.max(x0, Math.floor((e.box[0] + BOARD_PAD) / CONTACT_PX)), by0 = Math.max(y0, Math.floor((e.box[1] + BOARD_PAD) / CONTACT_PX));
+    const bx1 = Math.min(x1, Math.floor((e.box[2] + BOARD_PAD) / CONTACT_PX)), by1 = Math.min(y1, Math.floor((e.box[3] + BOARD_PAD) / CONTACT_PX));
+    if (bx1 < bx0 || by1 < by0) continue;
+    for (const q of e.shapes) {
+      const m = q.R + 8, sx0 = Math.max(bx0, Math.floor((Math.min(q.ax, q.bx) - m + BOARD_PAD) / CONTACT_PX)), sx1 = Math.min(bx1, Math.floor((Math.max(q.ax, q.bx) + m + BOARD_PAD) / CONTACT_PX));
+      const sy0 = Math.max(by0, Math.floor((Math.min(q.ay, q.by) - m + BOARD_PAD) / CONTACT_PX)), sy1 = Math.min(by1, Math.floor((Math.max(q.ay, q.by) + m + BOARD_PAD) / CONTACT_PX));
+      const abx = q.bx - q.ax, aby = q.by - q.ay, l2 = abx * abx + aby * aby;
+      for (let ty = sy0; ty <= sy1; ty++) {
+        const py = (ty + 0.5) * CONTACT_PX - BOARD_PAD;
+        for (let tx = sx0; tx <= sx1; tx++) {
+          const px = (tx + 0.5) * CONTACT_PX - BOARD_PAD;
+          let u = l2 > 1e-6 ? ((px - q.ax) * abx + (py - q.ay) * aby) / l2 : 0; u = u < 0 ? 0 : u > 1 ? 1 : u;
+          const t = (q.R + 7 - Math.hypot(px - q.ax - abx * u, py - q.ay - aby * u)) / 8;
+          if (t <= 0) continue;
+          const k = t >= 1 ? 1 : t * t * (3 - 2 * t), v = Math.round(255 * (1 - CONTACT_DARK * k)), i = ty * tw + tx;
+          if (v < D[i]) D[i] = v;
+        }
+      }
+    }
+  }
+  gl.activeTexture(gl.TEXTURE9);
+  gl.bindTexture(gl.TEXTURE_2D, C.tex);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.UNPACK_ROW_LENGTH, tw); gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, x0); gl.pixelStorei(gl.UNPACK_SKIP_ROWS, y0);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, x0, y0, x1 - x0 + 1, y1 - y0 + 1, gl.RED, gl.UNSIGNED_BYTE, D);
+  gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0); gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0); gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+}
+
 function setCommon(p) {
   const gl = GLR.gl, u = p.u, c = GLR.cam, w = GLR.win;
   gl.useProgram(p.p);
@@ -761,6 +888,11 @@ function setCommon(p) {
   if (u.uMarbleRange) gl.uniform2i(u.uMarbleRange, 0, GLR.shadowCount);
   if (u.uInst) { gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, INST.tex); gl.uniform1i(u.uInst, 8); }
   if (u.uBoardCol) gl.uniform3fv(u.uBoardCol, BOARD_REFL);
+  if (u.uBoardRect) gl.uniform4f(u.uBoardRect, -BOARD_PAD, -BOARD_PAD, BOARD_W + BOARD_PAD, BOARD_H + BOARD_PAD);
+  if (u.uContact && CONTACT.tex) { gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, CONTACT.tex); gl.uniform1i(u.uContact, 9); gl.uniform4fv(u.uContactInfo, CONTACT.info); }
+  if (u.uPegAlb && GLR.mats.peg) { gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, GLR.mats.peg.alb); gl.uniform1i(u.uPegAlb, 10); }
+  if (u.uPegHole && GLR.pegHole) { gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, GLR.pegHole); gl.uniform1i(u.uPegHole, 12); }
+  if (u.uDetailTex && GLR.mats.misc) { gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, GLR.mats.misc.surf); gl.uniform1i(u.uDetailTex, 11); }
   if (u.uWinU) { gl.uniform4fv(u.uWinU, w.U); gl.uniform4fv(u.uWinV, w.V); gl.uniform4fv(u.uWinRect, w.rect); gl.uniform4fv(u.uWinBars, w.bars); }
   if (u.uWinFold) gl.uniform4fv(u.uWinFold, w.fold);
   if (u.uEnv) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_CUBE_MAP, GLR.env.tex); gl.uniform1i(u.uEnv, 2); }
@@ -783,7 +915,8 @@ function bindMat(p, mat, big) {
   if (u.uNormalScale) gl.uniform1f(u.uNormalScale, mt.nscale);
   if (u.uTaps) gl.uniform1i(u.uTaps, big ? Math.min(GLR.taps, GLR.lite ? 8 : 12) : GLR.taps);
 }
-const isRoomCaster = (m) => m.mat !== 'wall' && m.mat !== 'desk';
+// (the wall, the desk and the window's frame are lit by the analytic window cookie, never drawn into the shadow maps)
+const isRoomCaster = (m) => m.mat !== 'wall' && m.mat !== 'desk' && m.mat !== 'window';
 const PIECE_MATS = ['metal', 'misc', 'letters'];
 // (the per-frame loops below index their arrays: a for-of iterator is garbage until the function is optimised)
 // Draw the room meshes, then the pieces (grouped by material, one instanced draw per mesh), with or without textures
@@ -795,13 +928,19 @@ function drawAll(p, withTextures, casterOnly) {
     const m = GLR.meshes[i];
     if (casterOnly && !isRoomCaster(m)) continue;
     const big = m.mat === 'wall' || m.mat === 'desk' || m.mat === 'peg';
-    if (withTextures) bindMat(p, m.mat, big);
+    if (withTextures) {
+      bindMat(p, m.mat, big);
+      if (u.uPeg) gl.uniform1f(u.uPeg, m.mat === 'peg' ? 1 : 0);
+      if (u.uWall) gl.uniform1f(u.uWall, m.mat === 'wall' ? 1 : 0);
+      if (u.uDetail) gl.uniform1f(u.uDetail, m.mat === 'wall' && !GLR.lite ? 0.35 : 0);       // (the detail layer: not on phones or software GL: one more fetch on every wall pixel)
+    }
     if (u.uEdgeAA) gl.uniform1f(u.uEdgeAA, big ? 0 : 1);      // (FXAA leaves the big textured surfaces' insides alone)
     gl.bindVertexArray(m.mesh.vao);
     gl.drawElements(gl.TRIANGLES, m.mesh.count, gl.UNSIGNED_INT, 0);
   }
   if (u.uBoardRefl) gl.uniform1f(u.uBoardRefl, 1);
   if (u.uEdgeAA) gl.uniform1f(u.uEdgeAA, 1);
+  if (withTextures) { if (u.uPeg) gl.uniform1f(u.uPeg, 0); if (u.uWall) gl.uniform1f(u.uWall, 0); if (u.uDetail) gl.uniform1f(u.uDetail, 0); }
   for (let mi = 0; mi < PIECE_MATS.length; mi++) {
     const mat = PIECE_MATS[mi];
     let bound = false;
@@ -820,7 +959,7 @@ function drawAll(p, withTextures, casterOnly) {
 /* ---- One frame ---- */
 // Render on demand: a still scene is drawn once; anything moving asks for frames
 function sceneSignature(t) {
-  const anim = GLR.rollCount > 0 || fxAnimating() || !!EDIT.ghost || EDIT.pulse > 0 || !!VIEWCAM.anim;
+  const anim = GLR.rollCount > 0 || fxAnimating() || !!EDIT.ghost || EDIT.pulse > 0 || !!VIEWCAM.anim || SHMOVE.pending;
   if (anim) return t;
   return -(MODEL.version * 7919 + VIEWCAM.version * 131 + GLR.rw * 3 + GLR.rh + (EDIT.lifted ? 17 : 0) + (GLR.dirty ? t : 0)) - 1;
 }
@@ -843,6 +982,7 @@ function renderGL(t) {
   updateShadowRegion();
   frameDraws(t);
   frameInstances();
+  updateContact();
   // 1) shadow maps: only when a piece moved, changed, wiggles or floats
   gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true);
   gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);

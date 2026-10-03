@@ -140,7 +140,17 @@ function overlayPaths(pieces, key) {
   OVL.stale = OVL.stale || PREVIEW.cut;
   return paths;
 }
+// While a run plays and the view is zoomed far in (past 4 x the home zoom), the 2D path preview, beat rings, labels
+// and look-ahead are painted over the pieces nearer the eye than the marble plane (they have no depth) and undo the
+// solidity of what is in front of them: they fade out between 4 x and 6 x the home zoom. Building (no session) keeps
+// them at full strength.
+function pathFade() {
+  if (!SIM.session || !glOk) return 1;
+  return 1 - clamp((VIEWCAM.zoom / Math.max(1, homeZoom()) - 4) / 2, 0, 1);
+}
 function drawPaths(g, t, ppu) {
+  const fade = pathFade();
+  if (fade <= 0.01) return;
   const pieces = previewPieces(), key = previewKey();
   const paths = overlayPaths(pieces, key);
   OVL.ends.length = 0;
@@ -157,14 +167,14 @@ function drawPaths(g, t, ppu) {
   if (!paths.size) return;
   const clk = layoutBeatClock(), clkKey = BEAT_CLOCK.key;
   const moving = SIM.session && drawnMarbles().length > 0;
-  const playing = SIM.playing, alpha = moving ? 0.3 : 1;
+  const playing = SIM.playing, alpha = (moving ? 0.3 : 1) * fade;
   const colliders = () => layoutColliders(pieces, key);  // (built only if a path's beats need working out again)
   const md = 2 * CANON.MARBLE_R * ppu;                     // a marble's diameter on screen
   const sel = EDIT.selected;
   const tiny = ppu < 0.3;                                   // (a board this small shows only the selected dropper's marks)
   g.save();
   g.lineJoin = 'round'; g.lineCap = 'round';
-  if (playing) { drawLookAhead(g, paths, pieces); g.restore(); return; }
+  if (playing) { drawLookAhead(g, paths, pieces, fade); g.restore(); return; }
   const clean = !EDIT.drag && !EDIT.ghost ? snapBase(null).clean : null;        // (where a bar can take the note cleanly)
   let di = 0;
   for (const [id, pr] of paths) {
@@ -231,9 +241,9 @@ function strokePath(g, S, i0, i1) {
 // Playing: each rolling marble shows the next half second of its dropper's path (a marble follows its dropper's
 // predicted path while nothing else touches it; path time = display time - its release)
 const LOOK = { key: null, colOf: new Map() };             // each dropper's colour, per preview
-function drawLookAhead(g, paths, pieces) {
+function drawLookAhead(g, paths, pieces, fade = 1) {
   const list = drawnMarbles(), dt = 1 / 60;
-  g.globalAlpha = 0.3; g.lineWidth = 2;                     // (faint: the marbles in flight are what to watch)
+  g.globalAlpha = 0.3 * fade; g.lineWidth = 2;              // (faint: the marbles in flight are what to watch)
   if (LOOK.key !== paths) {
     LOOK.key = paths; LOOK.colOf.clear();
     let di = 0;
@@ -363,13 +373,14 @@ function drawEnd(g, end, id) {
 }
 // Phones, a demo playing, and any run on a tower: a soft halo round each marble in its voice's tint (melody bright,
 // accompaniment darker), so the marbles can be followed at a small scale and down a tall board. It fades out as the
-// view zooms in (gone once a marble is 64 px across): close up the glass itself is what to look at.
+// view zooms in (full below a 28 px marble, gone at 44 px): at the follow zoom the glass, swirl and glint are what to
+// look at, so the glow stays a faint ring (radius 1.6 R, peak alpha 0.4) that only helps the eye find the marble.
 function drawHalos(g, ppu) {
   if (!SIM.session || !(tallBoard() || (SIM.playing && MODEL.demoId && phoneView()))) return;
-  const md = 2 * CANON.MARBLE_R * ppu, fade = clamp((64 - md) / 32, 0, 1);
+  const md = 2 * CANON.MARBLE_R * ppu, fade = clamp((44 - md) / 16, 0, 1);
   if (fade <= 0) return;
   const b = MarbleDemos.cached(MODEL.demoId), dv = b && b.dropperVoice;
-  const r = Math.max(10, CANON.MARBLE_R * ppu * 2.2);
+  const r = Math.max(8, CANON.MARBLE_R * ppu * 1.6);
   g.save();
   g.globalAlpha = fade;
   for (const m of drawnMarbles()) {
@@ -378,7 +389,7 @@ function drawHalos(g, ppu) {
     VIEW.b2sTo(q[0], q[1], SP);
     const mel = !dv || !dv.get(m.dropperId);
     const gr = g.createRadialGradient(SP[0], SP[1], CANON.MARBLE_R * ppu * 0.9, SP[0], SP[1], r);
-    gr.addColorStop(0, mel ? 'rgba(255, 244, 190, 0.8)' : 'rgba(120, 165, 255, 0.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    gr.addColorStop(0, mel ? 'rgba(255, 244, 190, 0.4)' : 'rgba(120, 165, 255, 0.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = gr; g.beginPath(); g.arc(SP[0], SP[1], r, 0, Math.PI * 2); g.fill();
   }
   g.restore();

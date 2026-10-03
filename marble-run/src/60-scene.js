@@ -255,11 +255,67 @@ function buildRoom(rnd) {
   // the desk (one-sided): from the wall's corner on past the camera, far beyond the side walls, with the occlusion
   // gradient of the side walls' corners; a camera dipping under it looks through it at the wall going on down
   const desk = MB('desk'); desk.setMat(1, 0, 0, 6);
-  const dz = [[WALL_Z, 0.5], [WALL_Z + 18, 0.72], [WALL_Z + 55, 0.9], [WALL_Z + 140, 1], [1800, 1], [Z1, 1]];
+  // (it ends at DESK_EDGE: a real desk top with a front edge, legs and a floor under it, not a plane to the horizon)
+  const dz = [[WALL_Z, 0.5], [WALL_Z + 18, 0.72], [WALL_Z + 55, 0.9], [WALL_Z + 140, 1], [DESK_EDGE, 1]];
   const dx = [[X0, 1], [R.x0 - 40, 1], [R.x0, 0.6], [R.x0 + 40, 0.8], [R.x0 + 200, 0.95], [R.x0 + 600, 1], [R.x1 - 600, 1], [R.x1 - 200, 0.95], [R.x1 - 40, 0.8], [R.x1, 0.6], [R.x1 + 40, 1], [X1, 1]];
   surfaceGrid(desk, dz.length, dx.length, (i, j) => [dx[j][0], -DESK_Y, dz[i][0]], (i, j) => [dx[j][0] / 1024, dz[i][0] / 1024], () => [0, 1, 0],
     { forceRef: true, col: (i, j) => { const k = dz[i][1] * dx[j][1]; return [0.9 + 0.1 * k, 0.9 + 0.1 * k, 0.9 + 0.1 * k, k]; } });
+  buildDeskKit(desk, R, X0, X1);
   desk.setMat(1, 0, 0, 0);
+  buildPendant(wall, R);
+}
+
+/* ---- Under and on the desk: a 70-unit front edge (the slab's thickness), legs, a floor, and a few things that give the
+ *  tower a size (1 unit is about 1 mm: the desk is 760 high, the pencil pot 95). The floor is the desk's wood in a
+ *  grey tint, one-sided like the desk (a camera below it sees through to the wall going on down). ---- */
+const DESK_EDGE = 1800, DESK_LEG = 760;
+function buildDeskKit(desk, R, X0, X1) {
+  const top = -DESK_Y, fl = top - DESK_LEG;
+  desk.setCol(0.8, 0.8, 0.8, 1); desk.setMat(1, 0, 0, 6);
+  flatQuad(desk, [X0, top - 70, DESK_EDGE], [X1, top - 70, DESK_EDGE], [X1, top, DESK_EDGE], [X0, top, DESK_EDGE], [0, 0, 1], [X0 / 1024, 0], [X1 / 1024, 0], [X1 / 1024, 0.07], [X0 / 1024, 0.07]);
+  desk.setMat(1, 0, 0, 0); desk.setCol(0.62, 0.6, 0.57, 1);
+  for (let x = X0 + 400; x < X1; x += 2400) boxMesh(desk, [x - 40, fl, DESK_EDGE - 120], [x + 40, top - 70, DESK_EDGE - 40], 96);
+  // the floor: grey boards, darker towards the wall
+  desk.setMat(1, 0, 0, 6);
+  const fz = [[WALL_Z, 0.5], [WALL_Z + 30, 0.7], [WALL_Z + 150, 0.9], [WALL_Z + 600, 1], [R.z1, 1]];
+  surfaceGrid(desk, fz.length, 2, (i, j) => [j ? X1 : X0, fl, fz[i][0]], (i, j) => [(j ? X1 : X0) / 1024, fz[i][0] / 1024], () => [0, 1, 0],
+    { forceRef: true, col: (i) => { const k = fz[i][1]; return [0.5 * k, 0.5 * k, 0.52 * k, k]; } });
+  desk.setMat(1, 0, 0, 0); desk.setCol(1, 1, 1, 1);
+  // a steel pencil pot with pencils on one side of the tray, a jar of marbles on the other (lathed at the origin, moved)
+  const m = MB('metal'), jarR = 52, potR = 36, potH = 95, jarX = -210, potX = BOARD_W + 210;
+  const lathe = (cx, cz, rows) => { markStart(m); latheY(m, rows, 0, Math.PI * 2, 30, false, 64, cz); translateLast(m, cx, 0); };
+  put(m, [0.7, 0.71, 0.74], FIN.steel);
+  lathe(potX, 150, [[DESK_Y, potR - 2], [DESK_Y - 0.5, potR], [DESK_Y - potH + 2, potR], [DESK_Y - potH, potR - 1.5]]);
+  const pen = ['#e8453c', '#f2d23a', '#3f7fd6', '#57b347', '#f39a2b'];
+  pen.forEach((hex, k) => {
+    const a = k / pen.length * Math.PI * 2, tx = Math.cos(a) * 30, tz = Math.sin(a) * 30;
+    rod(put(m, lin(hex), FIN.satin), [[potX + tx * 0.3, top + 25, 150 + tz * 0.3], [potX + tx, top + potH + 55 + (k % 3) * 10, 150 + tz]], 3.6, 6, true);
+  });
+  put(m, [0.03, 0.03, 0.035], [2.5, 0]);
+  lathe(potX, 150, [[DESK_Y - potH + 1.5, potR - 1.5], [DESK_Y - potH + 1.5, 0.5]]);
+  // the jar: dark glass-green, a brass lid
+  put(m, [0.18, 0.34, 0.3], [0.5, 0]);
+  lathe(jarX, 190, [[DESK_Y, jarR - 4], [DESK_Y - 4, jarR], [DESK_Y - 92, jarR], [DESK_Y - 100, jarR - 6], [DESK_Y - 104, jarR - 14]]);
+  put(m, BRASS, FIN.brass);
+  lathe(jarX, 190, [[DESK_Y - 104, jarR - 13], [DESK_Y - 111, jarR - 13], [DESK_Y - 115, jarR - 17]]);
+  lathe(jarX, 190, [[DESK_Y - 115, jarR - 17], [DESK_Y - 115.1, 0.5]]);
+  m.setCol(1, 1, 1, 1); m.setMat(1, 0, 0, 0);
+}
+/* ---- A light you can see from the tower: a fluorescent light bar on the wall just above the top of the board (the way a
+ *  picture light sits over a board), emissive so it blooms, so the sunlight and the blooming strips have a source in
+ *  sight wherever the camera is near the top of the tower (the ceiling is 16000 units up and the window 5000 away: out
+ *  of reach within the camera's limits). Its housing is window-frame material, which casts no shadow, and it stands behind the
+ *  board's plane, so it neither shades nor hides the board from any angle. ---- */
+function buildPendant(wall, R) {
+  void R;
+  const w = Math.max(900, BOARD_W * 1.15), cx = BOARD_W / 2, y0 = 130, z0 = WALL_Z + 1, z1 = WALL_Z + 38;
+  const hs = MB('window');                                                                  // (the window frame's material: no mortar pattern, no shadow)
+  hs.setCol(0.16, 0.16, 0.17, 1); hs.setMat(1, 0, 0, 0);
+  boxMesh(hs, [cx - w / 2, y0, z0], [cx + w / 2, y0 + 50, z1], 64);                         // the steel housing
+  hs.setCol(1, 1, 1, 1);
+  wall.setCol(1, 0.97, 0.9, 1); wall.setMat(1, 0, 0, 7);
+  flatQuad(wall, [cx - w / 2 + 8, y0 + 6, z1 + 0.6], [cx + w / 2 - 8, y0 + 6, z1 + 0.6], [cx + w / 2 - 8, y0 + 44, z1 + 0.6], [cx - w / 2 + 8, y0 + 44, z1 + 0.6], [0, 0, 1], [0, 0], [1, 0], [1, 1], [0, 1]);   // the diffuser
+  wall.setCol(1, 1, 1, 1); wall.setMat(1, 0, 0, 0);
 }
 
 /* ---- The window the sun comes through: on the left side wall where the beam through the middle of the board meets
@@ -270,7 +326,11 @@ function buildRoom(rnd) {
 function buildWindow() {
   const R = roomExtent(), W = R.win, x = R.x0 + 0.5, hw = W.w / 2, hh = W.h / 2, yc = W.y, zc = W.z;
   const F = 120, D = 48, B = 30;                            // frame width, its depth off the wall, glazing bar width
-  const paint = MB('misc'); paint.setCol(0.93, 0.92, 0.9, 1); paint.setMat(1.15, 0, 1, 6);
+  // (its own material key, drawn with the 'misc' textures: bindMat falls back to them. It is NOT a shadow caster: the
+  //  frame stands thousands of units in front of the wall at a zoomed-out view and, inside cascade 1's range, painted
+  //  hard black bars across the wall and desk that disagree with the analytic window cookie (windowCookie), which
+  //  already puts the window's own shadow, mullion included, on the board and the room; see isRoomCaster)
+  const paint = MB('window'); paint.setCol(0.93, 0.92, 0.9, 1); paint.setMat(1.15, 0, 1, 6);
   const box = (y0, z0, y1, z1, d = D) => boxMesh(paint, [x, y0, z0], [x + d, y1, z1], 128);
   box(yc - hh - F, zc - hw - F, yc + hh + F, zc - hw);      // jambs
   box(yc - hh - F, zc + hw, yc + hh + F, zc + hw + F);

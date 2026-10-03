@@ -74,7 +74,12 @@ vec3 envBRDF(vec3 f0, float rough, float NoV) {
   vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
   return f0 * AB.x + AB.y;
 }
-vec3 envSpec(vec3 R, float rough) { return textureLod(uEnv, R, rough * uEnvMax).rgb; }
+vec4 envSpec4(vec3 R, float rough) { return textureLod(uEnv, R, rough * uEnvMax); }
+vec3 envSpec(vec3 R, float rough) { return envSpec4(R, rough).rgb; }
+// the cube's alpha is the room's luminance as a mirror (chrome, glass) sees it, a dim room with bright features (see envRadiance):
+// the plain room's colour at that luminance. (The colour is divided by the luminance sampled with it, so the two interpolate
+// as a tint and a level and no hairline of the plain room's survives into the mirror room.)
+vec3 envMirror(vec4 e) { return e.rgb * (e.a / max(dot(e.rgb, vec3(0.2126, 0.7152, 0.0722)), 0.02)); }
 float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 
 // Percentage-closer soft shadows: blocker search on raw depth, then hardware-bilinear PCF whose
@@ -96,7 +101,7 @@ float pcss(sampler2D sm, sampler2DShadow smc, mat4 smat, vec4 info, vec3 wp, vec
   for (int i = 0; i < BLOCKER_SAMPLES; i++) {
     if (i >= nb) break;
     float fi = float(i) + 0.5;
-    vec2 o = rot * vec2(cos(fi * 2.39996), sin(fi * 2.39996)) * sqrt(fi / float(nb)) * sr;
+    vec2 o = rot * vec2(cos(fi * 2.39996), sin(fi * 2.39996)) * (fi / float(nb)) * sr;   // (taps spread evenly in radius, not in area: a thin occluder just beside the pixel is found, where an area-uniform search over the whole penumbra range missed it and left lit dots in its shadow)
     float d = texture(sm, c.xy + o).r;
     if (d < zr) { bsum += d; bn += 1.0; }
   }
@@ -115,7 +120,9 @@ float pcss(sampler2D sm, sampler2DShadow smc, mat4 smat, vec4 info, vec3 wp, vec
     vec2 o = prot * vec2(cos(fi * 2.39996), sin(fi * 2.39996)) * sqrt(fi / float(np)) * fr;
     lit += texture(smc, vec3(c.xy + o, zr));
   }
-  return lit / float(np);
+  // (the filter's two tails are cut: a penumbra pixel with one tap lit of sixteen, or one in shadow, is sampling noise, and on a
+  //  bright satin part it glitters; the middle of the penumbra is as soft as it was)
+  return smoothstep(0.1, 0.9, lit / float(np));
 }
 float sunShadow(vec3 wp, vec3 n, float extra, float rnd) {
   bool in0, in1;
@@ -215,11 +222,32 @@ uniform float uNormalScale;
 uniform float uBoardRefl;  // per draw: 1 = mounted on the pegboard (reflections behind it see the board)
 uniform vec3 uBoardCol;    // the pegboard's lit colour, as reflected
 uniform float uEdgeAA;     // per draw, kept in the scene's alpha: 1 = geometry whose edges FXAA may smooth, 0 = a big textured surface
+uniform float uPeg;        // per draw: 1 = the pegboard (its holes, rims and the view down them are worked out here, exactly, at any zoom)
+uniform float uWall;       // per draw: 1 = the block wall (mortar joints worked out here)
+uniform float uDetail;     // per draw: strength of the fine detail normal layer (the wall)
+uniform sampler2D uContact;    // R8, board space: contact occlusion under every foot, plate and tube (see updateContact)
+uniform vec4 uContactInfo;     // x, y: board offset of the map, z, w: 1 / (map size in board units)
+uniform sampler2D uPegAlb;     // the pegboard's albedo: what the pieces mounted on it mirror
+uniform sampler2D uPegHole;    // its hole pattern, one 20-unit cell, mipmapped (see pegSeen)
+uniform sampler2D uDetailTex;  // a fine normal tile (the wall's detail layer)
+uniform vec4 uBoardRect;       // the pegboard's edges in board units (y down): x0, y0, x1, y1
 #ifdef DEBUG
 uniform int uDebug;
 #endif
 in vec3 vPos; in vec3 vNrm; in vec4 vTan; in vec2 vUv; in vec4 vCol; in vec4 vMat; in float vGlow; flat in vec3 vGlowCol;
 out vec4 outColor;
+// The pegboard: a hole every 20 board units (the snap grid), 3.7 units in radius, right through a 9-unit board
+const float HOLE_R = 3.7, HOLE_PITCH = 20.0, BOARD_THICK = 9.0;
+// The pegboard as a pieces' reflection sees it at board point b (y down): the hole pattern, from a one-cell mipmapped,
+// anisotropic tile (genPegHoleTile: hole, bevel and board, the hole in the middle). A reflection squeezed by a curved piece
+// is averaged by the hardware along the long side of the pixel's footprint (bdx, bdy on the board), so the holes keep their
+// pitch along a rod and smear across it, and the pattern is its mean PEG_MEAN when the footprint spans several pitches. A
+// rough piece blurs it by aa units more.
+const float PEG_MEAN = 0.87;
+float pegSeen(vec2 b, vec2 bdx, vec2 bdy, float aa) {
+  float g = aa / HOLE_PITCH;
+  return textureGrad(uPegHole, (b + 10.0) / HOLE_PITCH, bdx / HOLE_PITCH + vec2(g, 0.0), bdy / HOLE_PITCH + vec2(0.0, g)).r;
+}
 void main() {
   float flag = vMat.w;
   if ((flag > 4.5 && flag < 5.5) || flag > 6.5) {            // emissive (the ceiling's light strips): its own light, no shading
@@ -239,14 +267,59 @@ void main() {
   else { albedo = alb.rgb * vCol.rgb; ao = alb.a * vCol.a; }
   vec3 N0 = normalize(vNrm);
   if (!gl_FrontFacing) N0 = -N0;
+  // the block wall (uWall): mortar joints between 500 x 250 blocks (11 units wide, odd courses shifted by half a block),
+  // worked out from the position so they stay crisp at any zoom, and a fine detail normal layer; far away, where a
+  // pixel is wider than a joint, they average out to their mean coverage. Mortar is a shade darker and rougher, with a
+  // little occlusion along its edges and a tilt of the block's edge into the joint. Mortar lines run on across the
+  // corner into the side walls (the courses depend on the height alone).
+  float wallM = 0.0;
+  vec3 wallTilt = vec3(0.0);
+  vec2 detUv = vec2(0.0);
+  if (uWall > 0.5) {
+    vec3 an = abs(N0);
+    float tb = -vPos.y;                                             // board y (down), as the wall texture's rows run
+    float sc = an.z > 0.5 ? vPos.x : vPos.z + 1850.0 * sign(N0.x);   // (the side walls' texture is shifted 0.37 of a tile: keep the joints on the blocks it paints)
+    detUv = an.y > 0.5 ? vec2(vPos.x, vPos.z) : vec2(sc, tb);
+    vec2 fw = fwidth(vec2(sc, tb));                                 // (derivatives outside the branch below: it is not uniform across a quad)
+    if (an.y < 0.5) {                                               // (the plaster ceiling has no joints)
+      float row = floor(tb / 250.0);
+      float sx = mod(sc - mod(row, 2.0) * 250.0 + 255.5, 500.0) - 250.0, sy = mod(tb + 130.5, 250.0) - 125.0;
+      float ax = abs(sx), ay = abs(sy);
+      float far = smoothstep(6.0, 22.0, max(fw.x, fw.y));
+      wallM = max(1.0 - smoothstep(5.5 - 0.5 * fw.x, 5.5 + 0.5 * fw.x, ax), 1.0 - smoothstep(5.5 - 0.5 * fw.y, 5.5 + 0.5 * fw.y, ay));
+      wallM = mix(wallM, 0.07, far);
+      float edgeO = max(1.0 - smoothstep(5.5, 11.5, ax), 1.0 - smoothstep(5.5, 11.5, ay));
+      albedo = mix(albedo, albedo * 0.8, wallM);
+      ao *= 1.0 - 0.12 * mix(edgeO, 0.1, far);
+      float kx = smoothstep(5.0, 5.7, ax) * (1.0 - smoothstep(5.7, 8.5, ax)), ky = smoothstep(5.0, 5.7, ay) * (1.0 - smoothstep(5.7, 8.5, ay));
+      vec2 tl = vec2(-sign(sx) * kx, sign(sy) * ky) * 0.7 * (1.0 - far);
+      wallTilt = an.z > 0.5 ? vec3(tl.x, tl.y, 0.0) : vec3(0.0, tl.y, tl.x);
+    }
+  }
+  // the pegboard (uPeg): holes drawn analytically (a distance to the nearest hole centre, exactly anti-aliased at any
+  // zoom), a darker bevel and occlusion ring round each, and the view down each bore traced below
+  vec2 pb = vec2(vPos.x, -vPos.y), pq = vec2(0.0);
+  float pd = 99.0, pegIn = 0.0, contact = 1.0;
+  if (uPeg > 0.5) {
+    contact = texture(uContact, (pb + uContactInfo.xy) * uContactInfo.zw).r;
+    pq = (fract((pb + 10.0) / HOLE_PITCH) - 0.5) * HOLE_PITCH;
+    pd = length(pq);
+    vec2 pu = pq / max(pd, 1e-4);
+    float paa = max(0.5 * (abs(dot(pu, dFdx(pb))) + abs(dot(pu, dFdy(pb)))), 0.02);
+    pegIn = 1.0 - smoothstep(HOLE_R - paa, HOLE_R + paa, pd);
+    albedo *= 1.0 - 0.18 * (1.0 - smoothstep(HOLE_R, HOLE_R + 1.3, pd));
+  }
   vec3 T = vTan.xyz - N0 * dot(N0, vTan.xyz);
   T = dot(T, T) > 1e-8 ? normalize(T) : vec3(1.0, 0.0, 0.0);
   vec3 B = cross(N0, T) * vTan.w;
   vec2 nxy = (surf.xy * 2.0 - 1.0) * uNormalScale * engr;
-  vec3 N = normalize(T * nxy.x + B * nxy.y + N0 * sqrt(max(1.0 - dot(nxy, nxy), 0.05)));
-  float rough = clamp(surf.z * vMat.x, 0.04, 1.0);
+  nxy *= 1.0 - 0.8 * (1.0 - smoothstep(0.06, 0.2, clamp(surf.z * vMat.x, 0.04, 1.0)));   // (polished chrome keeps only a trace of the brushed grain: against a bright and dark room its texel noise would glitter)
+  if (uDetail > 0.0) nxy += (texture(uDetailTex, detUv / 24.0).xy * 2.0 - 1.0) * uDetail;
+  vec3 N = normalize(T * nxy.x + B * nxy.y + N0 * sqrt(max(1.0 - dot(nxy, nxy), 0.05)) + wallTilt);
+  float rough = clamp(surf.z * vMat.x, 0.04, 1.0), rough0 = rough;   // (rough0: the surface's own; rough also covers the curvature under a pixel)
   vec3 dn = fwidth(N0);
   rough = sqrt(rough * rough + min(dot(dn, dn) * 0.6, 0.2));
+  rough = min(rough + 0.15 * wallM, 1.0);
   float metal = vMat.y;
   vec3 V = normalize(uCamPos - vPos);
   float NoV = clamp(dot(N, V), 1e-4, 1.0);
@@ -270,19 +343,58 @@ void main() {
     float wrap = flag > 3.5 && flag < 4.5 ? 0.3 : 0.0;            // glue: a hint of translucency
     vec3 diff = diffC / PI * (1.0 - F);
     direct = (diff * clamp((NoL + wrap) / (1.0 + wrap), 0.0, 1.0) + spec * NoL) * uSunCol * sh * mT;
+    direct *= mix(1.0, contact, 0.6);                       // (next to a plate or foot the board also sees less of the sun's big disc: the contact map takes part of it too)
   }
   // ambient: SH irradiance + prefiltered environment, occluded by the baked AO and nearby marbles
   float occ = ao * mao;
+  if (uPeg > 0.5) occ *= contact * (1.0 - 0.45 * (1.0 - smoothstep(HOLE_R, HOLE_R + 1.8, pd)) * (1.0 - pegIn));
   vec3 irr = shIrradiance(N);
   if (flag > 5.5) irr += vec3(0.62, 0.59, 0.54) + vec3(0.55, 0.45, 0.32) * max(-N.y, 0.0);   // the room's far surfaces (side walls, ceiling, desk): daylight bounced round the room, the sunlit desk's warm bounce up on the ceiling
+  // (pieces on the board also catch the light bounced up from the sunlit desk and the board: the SH keeps the desk dim, and
+  //  the undersides of matt and satin parts would go black)
+  irr += uBoardRefl * vec3(0.62, 0.52, 0.4) * (0.3 + 0.7 * max(-N.y, 0.0));
   vec3 envB = envBRDF(f0, rough, NoV);
   vec3 R = reflect(-V, N);
   float horizon = clamp(1.0 + 1.3 * dot(R, N0), 0.0, 1.0);
-  vec3 envC = envSpec(R, rough);
-  // a metal piece mounted on the board mirrors the board behind it, not the room behind the camera
-  // (and a soft bright ceiling in the reflection: the room above the board is brighter than the env model's)
-  envC = envC * (1.0 + 0.6 * uBoardRefl) + uBoardRefl * vec3(0.4, 0.39, 0.37) * smoothstep(-0.05, 0.8, R.y);
-  envC = mix(envC, uBoardCol * (0.55 + 0.45 * sh), uBoardRefl * smoothstep(0.1, -0.35, R.z) * 0.5);
+  // (specular anti-aliasing: the angle one pixel's reflection sweeps, as the cube level whose edges are that soft: a thin rod
+  //  turns its whole reflected room under a few pixels, and sharp lights and walls would alias into hairlines on it)
+  float fpR = max(length(dFdx(R)), length(dFdy(R)));
+  float envRough = max(rough, min(4.0 * sqrt(max(0.5 * fpR - 0.012, 0.0) / 0.8), uEnvMax) / uEnvMax);
+  vec4 envC4 = envSpec4(R, envRough);
+  vec3 envC = envC4.rgb;
+  // A mirror (chrome, glass: rough < 0.06 .. 0.2) shows the room as it is, its bright lights and its dim walls (the cube's alpha:
+  // envMirror); every other piece keeps the pale daylit room, lifted a little (and a soft bright ceiling: the room above the
+  // board is brighter than the env model's).
+  float mirror = 1.0 - smoothstep(0.06, 0.2, rough);
+  envC = mix(envC, envMirror(envC4), mirror);
+  envC = envC * (1.0 + 0.6 * uBoardRefl * (1.0 - mirror)) + uBoardRefl * (1.0 - mirror) * vec3(0.4, 0.39, 0.37) * smoothstep(-0.05, 0.8, R.y);
+  // A piece mounted on the board mirrors the board behind it where its reflected ray goes into it: the real board, the point
+  // bp where the ray meets the board's plane, with its grain, the hole pattern there, the sun patch on it and the foot plates'
+  // contact shade; beyond the board's edge, the wall. The pattern is blurred by the piece's roughness over the distance the ray
+  // travels and filtered over the pixel's footprint on the board (bdx, bdy), so it never aliases: it is its mean where the
+  // reflection is stretched (grazing, the piece's silhouette).
+  if (uBoardRefl > 0.5) {
+    float tB = -vPos.z / min(R.z, -0.05);                              // distance along R to the board's plane
+    vec2 bp = vec2(vPos.x, -vPos.y) + vec2(R.x, -R.y) * tB;
+    vec2 bdx = dFdx(bp), bdy = dFdy(bp);                                // (derivatives out here: uBoardRefl is uniform per draw)
+    float bw = mix(smoothstep(0.35, -0.25, R.z) * 0.5, smoothstep(0.3, -0.2, R.z) * 0.95, mirror);   // (a mirror sees the board wherever its reflected ray goes into it)
+    if (bw > 0.002) {
+      float edge = smoothstep(0.02, 0.2, dot(N0, V)) * smoothstep(0.0, -0.15, R.z);   // (no pattern at the piece's silhouette or a grazing reflection)
+      float aa = 0.5 + tB * rough0 * 0.9;                               // (a rough surface blurs what is far behind it)
+      float gw = max(exp2(rough0 * 5.0), 6.0);                           // (the grain's filter footprint, in units: the pixel's, widened by the roughness and by at least 6: the grain's texels, seen along a rod, would be beads)
+      float pl = dot(textureGrad(uPegAlb, (bp + 10.0) / 320.0, (bdx + vec2(gw, 0.0)) / 320.0, (bdy + vec2(0.0, gw)) / 320.0).rgb, vec3(0.3, 0.59, 0.11)) / 0.23;
+      float pat = mix(PEG_MEAN, pegSeen(bp, bdx, bdy, aa), edge);
+      pat = clamp(PEG_MEAN + (pat - PEG_MEAN) * mix(1.0, 1.8, mirror), 0.04, 1.1);   // (a mirror's squeezed holes are drawn a little bolder than their true average, so a soft dash reads at 1:1)
+      float lit = 0.5 + 0.55 * windowCookie(vec3(bp.x, -bp.y, 0.0), uSunDir);                      // the sun patch on the board there
+      float cs = mix(1.0, texture(uContact, (bp + uContactInfo.xy) * uContactInfo.zw).r, 0.8);    // the plates' and feet's contact shade
+      // (under an overhang what a face mirrors is brightened by the bounces between it and the plate and board below it)
+      float bounce = 1.0 + 0.9 * (1.0 - mirror) * smoothstep(0.2, 0.8, -N0.y);
+      vec3 bc = uBoardCol * mix(1.0, pl, 0.7 * edge) * pat * lit * cs * bounce;
+      vec2 inB = smoothstep(uBoardRect.xy - 12.0, uBoardRect.xy + 12.0, bp) * (1.0 - smoothstep(uBoardRect.zw - 12.0, uBoardRect.zw + 12.0, bp));
+      bc = mix(vec3(0.2, 0.19, 0.17), bc, inB.x * inB.y);
+      envC = mix(envC, bc, bw);
+    }
+  }
   vec3 spec = envC * envB * horizon * horizon;
   float specOcc = clamp(pow(NoV + occ, exp2(-16.0 * rough - 1.0)) - 1.0 + occ, 0.0, 1.0);
   vec3 ambient = diffC * irr / PI * occ * (1.0 - envB * 0.5) + spec * specOcc;
@@ -291,10 +403,29 @@ void main() {
   float flash = vGlow * vGlow * vGlow;
   vec3 col = direct * (1.0 + 0.8 * flash) + ambient + spec * specOcc * 1.6 * flash;
   col += vGlowCol * vGlow * (pow(1.0 - NoV, 2.0) * 0.9 + 0.06);
+  // looking down a pegboard hole: the ray from the eye enters at this fragment and either meets the bore's wall (lit
+  // by the sun where its ray out of the hole stays inside the bore, ambient dimmer the deeper it is) or leaves by the
+  // open back, the gap's shade
+  if (pegIn > 0.0) {
+    vec2 m = vec2(-V.x, V.y) / max(abs(V.z), 0.05);                // board-space shift per unit of depth
+    float c = min(dot(pq, pq) - HOLE_R * HOLE_R, 0.0), mm = dot(m, m), qm = dot(pq, m);
+    float tHit = mm > 1e-6 ? (-qm + sqrt(max(qm * qm - mm * c, 0.0))) / mm : 1e5;
+    vec3 holeC;
+    if (tHit < BOARD_THICK) {
+      vec2 h = pq + m * tHit;
+      vec3 nw = vec3(-h.x, h.y, 0.0) / HOLE_R;                     // the wall's normal, towards the bore's axis
+      float lit = 1.0 - smoothstep(HOLE_R - 0.6, HOLE_R + 0.6, length(h + vec2(L.x, -L.y) / max(L.z, 0.05) * tHit));
+      vec3 wc = albedo * 0.62;
+      float deep = 1.0 - 0.7 * tHit / BOARD_THICK;                // (the deeper the wall, the less light gets down there)
+      holeC = wc / PI * (max(dot(nw, L), 0.0) * uSunCol * sh * lit * deep + (shIrradiance(nw) + vec3(0.5, 0.47, 0.42)) * deep * deep * 0.5);   // (+ the daylight bounced round the room, as on the room's far surfaces)
+    } else holeC = (albedo * 0.5 + 0.05) * 0.2;                    // (the open back: the dim wall in the gap)
+    col = mix(col, holeC, pegIn);
+  }
 #ifdef DEBUG
   if (uDebug == 1) col = vec3(sh);                          // inspection: key-light visibility only
   if (uDebug == 2) col = envC;                              // inspection: the reflected room
   if (uDebug == 3) col = vec3(specOcc, occ, horizon);      // inspection: reflection occlusion terms
+  if (uDebug == 4) col = vec3(contact);                    // inspection: the board's contact-occlusion map
 #endif
   outColor = encodeScene(col);
   outColor.a = uEdgeAA;

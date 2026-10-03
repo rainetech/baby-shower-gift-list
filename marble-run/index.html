@@ -124,6 +124,7 @@
   #strip .btns #cineBtn { grid-column: 1 / -1; }
   #strip .btns button[hidden] { display: none; }
   #cineBtn[aria-pressed="true"] { background: #fff1c9; box-shadow: 0 0 0 2px var(--sel) inset; }
+  #cineBtn[aria-disabled="true"] { opacity: .5; cursor: default; }
 
   /* ---- The view compass: a small picture of the board from the camera's angle; drag it to turn the view, press it for
    *  the front view (placed by placeViewCube at the bottom right of the free area) ---- */
@@ -278,8 +279,9 @@
     #strip .btns { gap: 3px; }
     #strip .btns button { min-height: 27px; min-width: 0; padding: 2px 6px; font-size: 11px; }
     #viewCube { width: 56px; height: 56px; border-radius: 12px; }
-    #toast { bottom: calc(var(--tray-h) + 16px); }
-    body.has-strip #toast { bottom: calc(var(--tray-h) + 102px); }
+    /* (a toast sits above the view compass, a 56 px square in the free area's bottom right corner, never on top of it) */
+    #toast { bottom: calc(var(--tray-h) + 82px); }
+    body.has-strip #toast { bottom: calc(var(--tray-h) + 168px); }
     .steps { grid-template-columns: 1fr; gap: 8px; }
     .steps li { display: grid; grid-template-columns: 104px 1fr; gap: 2px 10px; align-items: center; text-align: left; padding: 8px 10px; }
     .steps svg { grid-row: span 2; margin: 0; }
@@ -330,7 +332,7 @@
     #strip .btns #cineBtn { grid-column: auto; }
     #strip .btns button { min-height: 32px; min-width: 0; padding: 2px 8px; font-size: 12px; }
     #viewCube { width: 54px; height: 54px; border-radius: 12px; }
-    #toast { bottom: 14px; }
+    #toast { bottom: 70px; max-width: calc(100vw - 300px); }      /* (above the compass in the free area's corner, between the controls and the tray) */
     .steps { grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .steps li { display: block; padding: 6px 8px; text-align: center; }
     .steps svg { max-width: 110px; margin: 0 auto 2px; }
@@ -788,7 +790,10 @@ const store = {
   json(k, fallback) { try { const v = JSON.parse(store.get(k)); return v == null ? fallback : v; } catch (e) { return fallback; } },
 };
 
-const reducedMotion = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } })();
+// Reduced motion follows the OS setting live (a change mid-session is taken up by the swing, the spin and the glides
+// the next frame; 85-ui.js listens for the change to update the Cinematic toggle)
+const RM_QUERY = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)'); } catch (e) { return null; } })();
+let reducedMotion = !!(RM_QUERY && RM_QUERY.matches);
 const touchUI = (() => { try { return matchMedia('(hover: none) and (pointer: coarse)').matches; } catch (e) { return false; } })();
 
 /* ---- Notes ----
@@ -2170,7 +2175,7 @@ const MarbleDemos = (() => {
   // A background solve: when it lands, the result is verified and cached like any other (a solve that is no
   // better, or fails, keeps the baked data, flagged); whoever waits (ready(), onDemoStatus) is told
   function startPending(id, def, promise, dataRes, dataReport) {
-    const entry = { t0: Date.now(), why: dataRes ? 'the baked tower plays differently here: ' + JSON.stringify(dataReport.firstMisses) : 'no baked data' };
+    const entry = { t0: Date.now(), promise, why: dataRes ? 'the baked tower plays differently here: ' + JSON.stringify(dataReport.firstMisses) : 'no baked data' };
     console.warn('demo ' + id + ': ' + entry.why + '; solving it in the background');
     pending.set(id, entry);
     const done = (res, report, source) => {
@@ -2192,6 +2197,15 @@ const MarbleDemos = (() => {
       console.warn('demo ' + id + ' could not be solved here: ' + (e && e.message));
       if (dataRes) done(dataRes, dataReport, 'data'); else done(null, null, 'solved');
     });
+  }
+  // Stop solving a demo in the background (the user pressed Cancel): the worker is stopped and the demo goes back to
+  // 'new' (not 'failed': it may be asked for again). Not while someone else (ready()) is waiting for it.
+  function cancel(id) {
+    const entry = pending.get(id);
+    if (!entry || (waiters.get(id) || []).length) return false;
+    pending.delete(id);
+    try { if (entry.promise && entry.promise.cancel) entry.promise.cancel(); } catch (e) { /* gone */ }
+    return true;
   }
   // Where a demo stands: { state: 'ready' | 'solving' | 'failed' | 'new' | 'unknown', ... }
   function status(id) {
@@ -2241,7 +2255,7 @@ const MarbleDemos = (() => {
     const extras = played.filter((p, i) => !used[i]).map((p) => ({ t: p.t, note: p.note }));
     return { ok: !misses.length && !extras.length, matched, targets: targets.length, extras: extras.length, maxErr, firstMisses: misses.slice(0, 4), firstExtras: extras.slice(0, 4), pair };
   }
-  return { addSource, removeSource, list, get, build, cached, status, ready, verify, matchNotes, get sources() { return sources.slice(); } };
+  return { addSource, removeSource, list, get, build, cached, status, ready, cancel, verify, matchNotes, get sources() { return sources.slice(); } };
 })();
 if (typeof window !== 'undefined') window.MarbleDemos = MarbleDemos;
 /* ============================================================================
@@ -4227,31 +4241,44 @@ const SOLVER_WORKER = (() => {
       const cut = (a, b) => { const i = t.indexOf(M(a)), j = t.indexOf(M(b)); return i >= 0 && j > i ? t.slice(i + M(a).length, j) : null; };
       const canon = cut('CANON:BEGIN', 'CANON:END'), solver = cut('SOLVER:BEGIN', 'SOLVER:END');
       if (canon && solver && typeof Worker !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && URL.createObjectURL) {
-        src = canon + '\n' + solver + '\nself.onmessage = function (e) { var d = e.data; try { var r = MarbleSolver.solveSong(d.song, CANON, { verify: false, hint: d.hint }); self.postMessage({ ok: true, layout: r.layout, targets: r.targets }); } catch (err) { self.postMessage({ ok: false, error: String((err && err.message) || err) }); } };\n';
+        src = canon + '\n' + solver + '\nself.onmessage = function (e) { var d = e.data; if (d.hang) { for (;;) { /* (?dev test hook: a solve that never ends) */ } } try { var r = MarbleSolver.solveSong(d.song, CANON, { verify: false, hint: d.hint }); self.postMessage({ ok: true, layout: r.layout, targets: r.targets }); } catch (err) { self.postMessage({ ok: false, error: String((err && err.message) || err) }); } };\n';
       }
     } catch (e) { src = null; }
     return src;
   }
   const available = () => !!source();
+  // How long one solve may take before it is given up (a hung or throttled worker must not hold the queue for the
+  // session): 90 s, 3 minutes on a phone (a song takes seconds to about half a minute); ?dev: window.__mmSolveDeadline (ms)
+  const deadline = () => (typeof DEV !== 'undefined' && DEV && window.__mmSolveDeadline) || (typeof GLR !== 'undefined' && GLR.mobile ? 180000 : 90000);
   function next() {
     if (busy || !queue.length) return;
     const job = queue.shift();
     busy = true;
-    let url = null, w = null;
-    const end = () => { busy = false; try { if (w) w.terminate(); } catch (e) { /* gone */ } try { if (url) URL.revokeObjectURL(url); } catch (e) { /* gone */ } setTimeout(next, 0); };
+    let url = null, w = null, timer = 0, over = false;
+    const end = () => { over = true; clearTimeout(timer); busy = false; try { if (w) w.terminate(); } catch (e) { /* gone */ } try { if (url) URL.revokeObjectURL(url); } catch (e) { /* gone */ } setTimeout(next, 0); };
+    // (ends the running job with an error: the deadline, or a cancel)
+    job.abort = (err) => { if (over) return; end(); job.reject(err); };
     try {
       url = URL.createObjectURL(new Blob([source()], { type: 'text/javascript' }));
       w = new Worker(url);
     } catch (e) { end(); job.reject(e); return; }
-    w.onmessage = (e) => { const d = e.data || {}; end(); if (d.ok) job.resolve({ layout: d.layout, targets: d.targets }); else job.reject(new Error(d.error || 'the solve failed')); };
-    w.onerror = (e) => { end(); job.reject(new Error((e && e.message) || 'the solver worker failed')); };
-    w.postMessage({ song: job.song, hint: job.hint });
+    w.onmessage = (e) => { if (over) return; const d = e.data || {}; end(); if (d.ok) job.resolve({ layout: d.layout, targets: d.targets }); else job.reject(new Error(d.error || 'the solve failed')); };
+    w.onerror = (e) => { if (over) return; end(); job.reject(new Error((e && e.message) || 'the solver worker failed')); };
+    timer = setTimeout(() => job.abort(new Error('took too long')), deadline());
+    w.postMessage({ song: job.song, hint: job.hint, hang: typeof DEV !== 'undefined' && DEV && !!window.__mmSolverHang });
   }
   // Solve `song` (opts.hint: the round that solved its baked tower, MarbleSolver.hintFrom) on a worker, queued:
-  // a promise of { layout, targets }; null when workers are not available here
+  // a promise of { layout, targets } (it has .cancel(): leave the queue, or stop the worker that is running it);
+  // null when workers are not available here
   function solve(song, hint) {
     if (!available()) return null;
-    return new Promise((resolve, reject) => { queue.push({ song, hint, resolve, reject }); next(); });
+    let job = null;
+    const p = new Promise((resolve, reject) => { job = { song, hint, resolve, reject, abort: null }; queue.push(job); next(); });
+    p.cancel = () => {
+      const i = queue.indexOf(job);
+      if (i >= 0) { queue.splice(i, 1); job.reject(new Error('cancelled')); } else if (job.abort) job.abort(new Error('cancelled'));
+    };
+    return p;
   }
   return { solve, available, get queued() { return queue.length + (busy ? 1 : 0); } };
 })();
@@ -4854,7 +4881,8 @@ function genMiscTextures() {
   TEX.miscSurf = surfaceFromHeight(h, W, H, 1.5, 1, true);
 }
 // Painted cinder-block classroom wall: one tile of 10 x 10 blocks (WALL_TEX.uw x uh units), seamless both ways, so
-// the wall can run as far round a tower as the camera sees (the room adds a gentle large-scale tone on top)
+// the wall can run as far round a tower as the camera sees (the room adds a gentle large-scale tone on top). It holds
+// the paint (block-to-block tone, roller laps, pits) at 0.26 px per unit; the mortar joints are the shader's.
 const WALL_TEX = { w: 1280, h: 640, uw: 5000, uh: 2500 };
 function* genWallTextures() {
   const { w: W, h: H, uw } = WALL_TEX, s = W / uw;
@@ -4876,15 +4904,7 @@ function* genWallTextures() {
       const x = (col * BW + off) * s, y = row * BH * s, bw = (BW - J) * s, bh = (BH - J) * s;
       const tone = tones[((row % 10) + 10) % 10 * 10 + ((Math.floor((col * BW + off) / BW) % 10) + 10) % 10];   // (a block and its copy across the seam match)
       g.fillStyle = tone > 0 ? `rgba(255,252,240,${tone})` : `rgba(90,80,60,${-tone})`;
-      g.fillRect(x, y, bw, bh);
-      // mortar joint: recessed, painted over
-      g.fillStyle = 'rgba(110, 100, 85, 0.22)'; g.fillRect(x + bw, y, J * s, bh + J * s); g.fillRect(x, y + bh, bw, J * s);
-      const gr = hg.createLinearGradient(0, y + bh, 0, y + bh + J * s);
-      gr.addColorStop(0, '#606060'); gr.addColorStop(0.5, '#303030'); gr.addColorStop(1, '#606060');
-      hg.fillStyle = gr; hg.fillRect(x, y + bh, bw + J * s, J * s);
-      const gr2 = hg.createLinearGradient(x + bw, 0, x + bw + J * s, 0);
-      gr2.addColorStop(0, '#606060'); gr2.addColorStop(0.5, '#303030'); gr2.addColorStop(1, '#606060');
-      hg.fillStyle = gr2; hg.fillRect(x + bw, y, J * s, bh);
+      g.fillRect(x, y, bw, bh);               // (the mortar joints between the blocks are drawn by the shader, exactly: `uWall`)
     }
   }
   yield;
@@ -4995,7 +5015,23 @@ const SUN_DIR = V3.norm([-0.52, 0.62, 0.58]);          // towards the key light 
 // `diffuse`: the light the room sheds on matt surfaces (the spherical harmonics); the reflections (the prefiltered
 // map) also see the bright room behind the viewer, a lit wall and a long ceiling light, which put crisp streaks on
 // rods, bevels and domes without changing the tone of the board or the wall.
-function envRadiance(d, blur, diffuse = false) {
+// `mirror`: the room as chrome and glass see it (a dim room with bright, crisp features, see RM); its luminance is stored in
+// the cube's alpha (genEnvironment) and the shader gives the plain room's colour that luminance, so only the sharpest mirrors
+// use it and every matt or satin metal keeps the pale daylit room it was tuned against.
+// The mirror room: the tone of the walls and the desk between the lights, and the lights (azimuth from the board's
+// normal, elevation, in degrees: from, to, from, to; radiance; green and blue relative to red). Azimuth > 0 is the viewer's right.
+const RM = {
+  wall: 0.06, desk: 0.07, edge: 0.03,
+  feats: [
+    [-16, 16, -8, 62, 3.0, 0.99, 0.95],          // the light column behind the viewer: a whiteboard and the ceiling panel over it
+    [-110, -72, -6, 54, 4.0, 1.0, 1.1],          // the window (the sun comes through it, up on the left)
+    [72, 110, -6, 54, 3.4, 1.0, 0.95],           // a door and a second window on the right
+    [-16, 16, -60, -10, 1.6, 0.95, 0.85],        // the sunlit desk in front of the whiteboard
+    [-110, -72, -60, -10, 2.0, 0.9, 0.7],        // the patch of sun the window throws on the desk
+    [72, 110, -60, -10, 1.8, 0.95, 0.85],        // and its bounce on the other side
+  ],
+};
+function envRadiance(d, blur, diffuse = false, mirror = false) {
   const [x, y, z] = d;
   const soft = 0.012 + blur * blur * 0.8;              // angular edge softness (radians)
   const sm = (e0, e1, v) => { const t = clamp((v - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -5012,7 +5048,7 @@ function envRadiance(d, blur, diffuse = false) {
   const inWin = sm(hu + s2, hu - s2, du) * sm(hv0 - s2, hv0 + s2, dv) * sm(hv1 + s2, hv1 - s2, dv) * (hu / Math.max(hu, soft));
   if (inWin > 0) {
     let mull = 1;
-    if (blur < 0.3) {
+    if (blur < 0.3 && diffuse) {          // (the reflections see no mullions: a hairline in the plain room would leave a hairline in the mirror room's gain)
       const mw = 0.016 + soft * 0.5;
       const cu = Math.abs(((az - waz) / 0.23) - Math.round((az - waz) / 0.23)) * 0.23;
       const cv = Math.abs(((dv - 0.02) / 0.32) - Math.round((dv - 0.02) / 0.32)) * 0.32;
@@ -5023,18 +5059,41 @@ function envRadiance(d, blur, diffuse = false) {
     r += (0.85 * L - r) * inWin; g += (0.95 * L - g) * inWin; b += (1.15 * L - b) * inWin;
   }
   if (!diffuse) {
+    // (the mirror room fades back to the pale one as the blur grows: a rough reflection averages the lights and the walls)
+    const crisp = mirror ? 1 - sm(0.25, 0.9, blur) : 0;
+    // below the horizon the reflections see the sunlit desk, not a dark floor: down-facing metal (the undersides of
+    // bars, rail ties from below) would otherwise go black (the matt surfaces' spherical harmonics keep their own tone)
+    if (y < 0) { const kf = sm(0, -0.35 - soft, y), f = lerp(0.32, 0.22, kf), w = 0.85; r = lerp(r, f, w); g = lerp(g, f * 0.93, w); b = lerp(b, f * 0.8, w); }
     // the room round and behind the viewer: pale walls in daylight above, the sunlit desk below
     // (the two meet at eye level with no dark seam between them)
     const kr = sm(-0.5, -0.05, z) * sm(-0.06, 0.1, y), kd = sm(-0.5, -0.05, z) * sm(0.02, -0.08, y) * (1 - sm(-0.75, -0.95, y));
-    r = lerp(r, 0.65, kr); g = lerp(g, 0.64, kr); b = lerp(b, 0.61, kr);
-    r = lerp(r, 0.65, kd); g = lerp(g, 0.63, kd); b = lerp(b, 0.59, kd);
-    // a bright wall facing the board, behind the viewer (a soft rectangle)
+    const wl = lerp(0.65, RM.wall, crisp), dl = lerp(0.65, RM.desk, crisp);
+    r = lerp(r, wl, kr); g = lerp(g, wl * 0.985, kr); b = lerp(b, wl * 0.94, kr);
+    r = lerp(r, dl, kd); g = lerp(g, dl * 0.97, kd); b = lerp(b, dl * 0.91, kd);
+    // a bright wall facing the board, behind the viewer (a soft rectangle: the blur of the lights below)
     const s3 = Math.max(soft, 0.05), az2 = Math.atan2(x, z), el2 = Math.asin(clamp(y, -1, 1));
-    const wall = sm(0.75 + s3, 0.75 - s3, Math.abs(az2 + 0.15)) * sm(-0.02 - s3, -0.02 + s3, el2) * sm(0.5 + s3, 0.5 - s3, el2);
+    const wall = sm(0.75 + s3, 0.75 - s3, Math.abs(az2 + 0.15)) * sm(-0.02 - s3, -0.02 + s3, el2) * sm(0.5 + s3, 0.5 - s3, el2) * (1 - crisp);
     r = lerp(r, 1.35, wall); g = lerp(g, 1.32, wall); b = lerp(b, 1.26, wall);
-    // a long ceiling light strip running left-right over the viewer's head
-    const strip = sm(0.09 + s3, 0.09 - s3, Math.abs(Math.atan2(z - 0.35, y))) * sm(0.9 + s3, 0.9 - s3, Math.abs(x)) * (y > 0 ? 1 : 0) * (0.09 / Math.max(0.09, s3));
+    // a long ceiling light strip running left-right over the viewer's head, and a second one over the board's side of
+    // the room (crisp at the sharp levels: the reflections of rods and domes slide across them as the view turns)
+    // (the mirror room's strips are wider and softer, with the same energy: against its dim walls a 10-degree strip would be a hairline)
+    const w1 = lerp(0.09, 0.2, crisp), w2 = lerp(0.06, 0.14, crisp);
+    const strip = sm(w1 + s3, w1 - s3, Math.abs(Math.atan2(z - 0.35, y))) * sm(0.9 + s3, 0.9 - s3, Math.abs(x)) * (y > 0 ? 1 : 0) * (w1 / Math.max(w1, s3)) * (0.09 / w1);
     r += 4.2 * strip; g += 4.2 * strip; b += 4.0 * strip;
+    const strip2 = sm(w2 + s3, w2 - s3, Math.abs(Math.atan2(z + 0.42, y))) * sm(0.85 + s3, 0.85 - s3, Math.abs(x)) * (y > 0 ? 1 : 0) * (w2 / Math.max(w2, s3)) * (0.06 / w2);
+    r += 3.2 * strip2; g += 3.2 * strip2; b += 3.0 * strip2;
+    // a bright door / whiteboard on the wall behind the viewer, off to one side (a crisp rectangle at the sharp levels)
+    const s4 = Math.max(soft, 0.012);
+    const door = sm(0.17 + s4, 0.17 - s4, Math.abs(az2 - 0.62)) * sm(-0.3 - s4, -0.3 + s4, el2) * sm(0.34 + s4, 0.34 - s4, el2) * (z > 0 ? 1 : 0) * (1 - crisp);
+    r = lerp(r, 1.9, door); g = lerp(g, 1.85, door); b = lerp(b, 1.75, door);
+    // the lit features of the mirror room, as soft-edged rectangles
+    if (crisp > 0) {
+      const sf = Math.max(soft, RM.edge);
+      for (const f of RM.feats) {
+        const k = sm(f[0] * RAD - sf, f[0] * RAD + sf, az2) * sm(f[1] * RAD + sf, f[1] * RAD - sf, az2) * sm(f[2] * RAD - sf, f[2] * RAD + sf, el2) * sm(f[3] * RAD + sf, f[3] * RAD - sf, el2) * sm(-0.3, -0.1, z) * crisp;
+        if (k > 0) { r = lerp(r, f[4], k); g = lerp(g, f[4] * f[5], k); b = lerp(b, f[4] * f[6], k); }
+      }
+    }
   }
   // two fluorescent ceiling panels (energy-conserving when blurred)
   const rho = 0.1;
@@ -5065,8 +5124,8 @@ function* genEnvironment(gl, out) {
       const data = new Float32Array(S * S * 4);
       for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
         const d = V3.norm(faceDir(f, (x + 0.5) / S * 2 - 1, (y + 0.5) / S * 2 - 1));
-        const c = envRadiance(d, blur), i = (y * S + x) * 4;
-        data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 1;
+        const c = envRadiance(d, blur), m = envRadiance(d, blur, false, true), i = (y * S + x) * 4;
+        data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];   // (alpha: the mirror room's luminance)
       }
       gl.texSubImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, level, 0, 0, S, S, gl.RGBA, gl.FLOAT, data);
     }
@@ -5097,43 +5156,62 @@ function* genEnvironment(gl, out) {
 /* ============================================================================
  *  The metal workshop set: pegboard, brushed metal, engraved note letters
  * ========================================================================== */
-// Tempered hardboard pegboard: one 320-unit tile holds 16 x 16 holes (a hole every 20 units, like the snap grid).
-// uv = (x + 10) / 320 puts a hole on every multiple of 20. Albedo alpha = baked AO (dark holes).
-const PEG = { tile: 320, pitch: 20, hole: 3.7, px: 3 };
+// Tempered hardboard pegboard: one 320-unit tile of grain (mottle and fibres) at 2 px per unit. The HOLES are not in the
+// texture: the shader draws them from the position (a hole every 20 units: the snap grid, 3.7 units in radius), exactly
+// at any zoom, with parallax down each bore (FS_PBR, `uPeg`). uv = (x + 10) / 320 keeps the grain registered to the
+// holes' grid. Albedo alpha is 1 (the occlusion round the holes comes from the shader).
+const PEG = { tile: 320, pitch: 20, hole: 3.7, px: 2 };
 function* genPegboardTextures() {
-  const S = PEG.tile * PEG.px, n = PEG.tile / PEG.pitch, s = PEG.px;
+  const S = PEG.tile * PEG.px;
   const c = cnv(S, S), g = c2d(c);
   g.fillStyle = '#a07a52'; g.fillRect(0, 0, S, S);
   // (every layer tiles: large-scale tone changes come from the board mesh's own vertex colours)
   paintMottle(g, S, S, 201, 6, 0.04, 'soft-light', null, true);
   paintMottle(g, S, S, 202, 30, 0.1, 'soft-light', null, true);
   paintMottle(g, S, S, 203, 120, 0.1, 'soft-light', null, true);
-  paintFibres(g, S, S, 16000, 204, 'rgba(255,225,185,0.07)', 'rgba(60,35,15,0.09)', 7, 0.9, true);
+  paintFibres(g, S, S, 7200, 204, 'rgba(255,225,185,0.07)', 'rgba(60,35,15,0.09)', 4.7, 0.9, true);
   g.getImageData(0, 0, 1, 1); yield;
   const id = g.getImageData(0, 0, S, S), px = id.data;
   const hgt = new Float32Array(S * S), rough = new Float32Array(S * S), rnd = mulberry32(205), nz = makeNoise2(206, 64);
-  const hr = PEG.hole * s, rim = 1.3 * s;
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    // distance to the nearest hole centre (holes at pitch/2 + k * pitch in tile pixels)
-    const cx = (Math.floor(x / (PEG.pitch * s)) + 0.5) * PEG.pitch * s, cy = (Math.floor(y / (PEG.pitch * s)) + 0.5) * PEG.pitch * s;
-    const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
     const i = y * S + x, k = i * 4;
     const grain = (nz(x / S * 32, y / S * 32, 32) - 0.5) * 0.06 + (rnd() - 0.5) * 0.05;
-    let h = 0.62 + grain * 0.4, ao = 1, dark = 1, r = 0.52 + (nz(x / S * 8, y / S * 8, 8) - 0.5) * 0.12;
-    if (d < hr) {                                   // the hole: a dark shaft
-      const f = d / hr;
-      h = 0.05 + 0.25 * f * f; dark = 0.16 + 0.22 * f * f; ao = 0.25 + 0.4 * f; r = 0.9;
-    } else if (d < hr + rim) {                       // a softly rounded, slightly crushed edge
-      const f = (d - hr) / rim;
-      h = 0.3 + 0.32 * Math.sin(f * Math.PI / 2); dark = 0.8 + 0.2 * f; ao = 0.72 + 0.28 * f;
-    } else if (d < hr + rim * 4) ao = 0.9 + 0.1 * (d - hr - rim) / (rim * 3);
-    px[k] *= dark * (1 + grain); px[k + 1] *= dark * (1 + grain); px[k + 2] *= dark * (1 + grain); px[k + 3] = 255 * ao;
-    hgt[i] = h; rough[i] = r;
+    px[k] *= 1 + grain; px[k + 1] *= 1 + grain; px[k + 2] *= 1 + grain; px[k + 3] = 255;
+    hgt[i] = 0.62 + grain * 0.4; rough[i] = 0.52 + (nz(x / S * 8, y / S * 8, 8) - 0.5) * 0.12;
   }
   g.putImageData(id, 0, 0);
   TEX.pegAlb = c;
   yield;
   TEX.pegSurf = surfaceFromHeight(hgt, S, S, 3.2, rough, true);
+}
+
+// The pegboard's hole pattern as the pieces' reflections see it (FS_PBR, pegSeen): one 20-unit cell, the hole in the middle
+// (1 = board, down to 0.1 in the bore, a darker bevel round it), R8 and mipmapped: the GPU's anisotropic filter then averages it
+// along the long side of a pixel's footprint, so it never aliases whatever the reflection's stretch
+function genPegHoleTile(gl, size = 128) {
+  const px = new Uint8Array(size * size), c = size / 2, R = PEG.hole, ss = 4;
+  const sm = (e0, e1, v) => { const t = clamp((v - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+  let sum = 0;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let v = 0;
+    for (let j = 0; j < ss; j++) for (let i = 0; i < ss; i++) {
+      const d = Math.hypot((x + (i + 0.5) / ss - c) * PEG.pitch / size, (y + (j + 0.5) / ss - c) * PEG.pitch / size);
+      v += 1 - 0.9 * (1 - sm(R - 0.25, R + 0.25, d)) - 0.25 * (1 - sm(R, R + 1.8, d));
+    }
+    px[y * size + x] = Math.round(255 * v / (ss * ss)); sum += px[y * size + x];
+  }
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, size, size, 0, gl.RED, gl.UNSIGNED_BYTE, px);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  const ext = gl.getExtension('EXT_texture_filter_anisotropic');
+  if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(GLR.aniso || 8, gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+  genPegHoleTile.mean = sum / (size * size * 255);
+  return t;
 }
 
 // Brushed metal (tiling, 512 x 512 = 128 x 128 units): long fine streaks along u. Tinted per vertex for
@@ -5381,8 +5459,8 @@ const srgb2lin = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055
 function lin(hex, k = 1) { const n = parseInt(hex.slice(1), 16); return [srgb2lin((n >> 16) / 255) * k, srgb2lin(((n >> 8) & 255) / 255) * k, srgb2lin((n & 255) / 255) * k]; }
 // Surface finishes: [roughness multiplier, metalness] (the brushed texture's own roughness is ~0.26)
 // Anodised aluminium and brass are true metals (their colour is the colour of their reflections), on the brushed grain
-const FIN = { anod: [0.92, 1], steel: [1.25, 1], satin: [1.9, 1], chrome: [0.16, 1], brass: [0.78, 1], rubber: [3.5, 0], galv: [2.3, 1] };
-const STEEL = [0.62, 0.63, 0.65], CHROME = [0.95, 0.95, 0.97], BRASS = lin('#e3c27a'), RUBBER = [0.035, 0.035, 0.04];
+const FIN = { anod: [0.92, 1], steel: [1.25, 1], satin: [1.9, 1], chrome: [0.16, 1], brass: [0.78, 1], rubber: [3.5, 0], galv: [2.3, 1], nickel: [1.3, 0.05] };
+const STEEL = [0.62, 0.63, 0.65], CHROME = [0.95, 0.95, 0.97], BRASS = lin('#e3c27a'), RUBBER = [0.035, 0.035, 0.04], NICKEL = [0.88, 0.89, 0.91];
 // anodised colour: the note's colour lifted 15% towards white (in sRGB, which keeps the hue the eye sees)
 function anodCol(note) { return hexRgb(noteHex(note)).map((v) => srgb2lin(lerp(v / 255, 1, 0.15))); }
 
@@ -5478,7 +5556,9 @@ function screw(M, x, y, z, r = 1.9) {
 // plate with two chrome screws. Everything of it in the marble's reach lies inside the rail's collider outline.
 function bracket(M, x, y, ang, note, dz) {
   const c = Math.cos(ang), s = Math.sin(ang), at = ([u, v]) => [x + c * u - s * v, y + s * u + c * v];
-  prism(put(M('metal'), anodCol(note), FIN.anod), roundRectPts(1.8, 2.2, 0.8, 2).map(at), 1.4, ZM + dz + 1.5, 0.5, (u, v) => [u / 64, v / 64]);
+  // (a silent rail's ties are satin nickel: anodised in no colour, a pure metal would mirror only the dark floor from below;
+  //  half metal, half matt coat, the sunlit side and the bounced light show their own mid-grey)
+  prism(note == null ? put(M('metal'), NICKEL, FIN.nickel) : put(M('metal'), anodCol(note), FIN.anod), roundRectPts(1.8, 2.2, 0.8, 2).map(at), 1.4, ZM + dz + 1.5, 0.5, (u, v) => [u / 64, v / 64]);
   prism(put(M('metal'), STEEL, FIN.satin), roundRectPts(5.6, 3.3, 1.2, 3).map(at), 0.2, 1.6, 0.4, (u, v) => [u / 64, v / 64 + 0.3]);
   for (const u of [-3.7, 3.7]) { const q = at([u, 1.6]); screw(M, q[0], q[1], 1.6, 1.15); }
 }
@@ -5981,11 +6061,67 @@ function buildRoom(rnd) {
   // the desk (one-sided): from the wall's corner on past the camera, far beyond the side walls, with the occlusion
   // gradient of the side walls' corners; a camera dipping under it looks through it at the wall going on down
   const desk = MB('desk'); desk.setMat(1, 0, 0, 6);
-  const dz = [[WALL_Z, 0.5], [WALL_Z + 18, 0.72], [WALL_Z + 55, 0.9], [WALL_Z + 140, 1], [1800, 1], [Z1, 1]];
+  // (it ends at DESK_EDGE: a real desk top with a front edge, legs and a floor under it, not a plane to the horizon)
+  const dz = [[WALL_Z, 0.5], [WALL_Z + 18, 0.72], [WALL_Z + 55, 0.9], [WALL_Z + 140, 1], [DESK_EDGE, 1]];
   const dx = [[X0, 1], [R.x0 - 40, 1], [R.x0, 0.6], [R.x0 + 40, 0.8], [R.x0 + 200, 0.95], [R.x0 + 600, 1], [R.x1 - 600, 1], [R.x1 - 200, 0.95], [R.x1 - 40, 0.8], [R.x1, 0.6], [R.x1 + 40, 1], [X1, 1]];
   surfaceGrid(desk, dz.length, dx.length, (i, j) => [dx[j][0], -DESK_Y, dz[i][0]], (i, j) => [dx[j][0] / 1024, dz[i][0] / 1024], () => [0, 1, 0],
     { forceRef: true, col: (i, j) => { const k = dz[i][1] * dx[j][1]; return [0.9 + 0.1 * k, 0.9 + 0.1 * k, 0.9 + 0.1 * k, k]; } });
+  buildDeskKit(desk, R, X0, X1);
   desk.setMat(1, 0, 0, 0);
+  buildPendant(wall, R);
+}
+
+/* ---- Under and on the desk: a 70-unit front edge (the slab's thickness), legs, a floor, and a few things that give the
+ *  tower a size (1 unit is about 1 mm: the desk is 760 high, the pencil pot 95). The floor is the desk's wood in a
+ *  grey tint, one-sided like the desk (a camera below it sees through to the wall going on down). ---- */
+const DESK_EDGE = 1800, DESK_LEG = 760;
+function buildDeskKit(desk, R, X0, X1) {
+  const top = -DESK_Y, fl = top - DESK_LEG;
+  desk.setCol(0.8, 0.8, 0.8, 1); desk.setMat(1, 0, 0, 6);
+  flatQuad(desk, [X0, top - 70, DESK_EDGE], [X1, top - 70, DESK_EDGE], [X1, top, DESK_EDGE], [X0, top, DESK_EDGE], [0, 0, 1], [X0 / 1024, 0], [X1 / 1024, 0], [X1 / 1024, 0.07], [X0 / 1024, 0.07]);
+  desk.setMat(1, 0, 0, 0); desk.setCol(0.62, 0.6, 0.57, 1);
+  for (let x = X0 + 400; x < X1; x += 2400) boxMesh(desk, [x - 40, fl, DESK_EDGE - 120], [x + 40, top - 70, DESK_EDGE - 40], 96);
+  // the floor: grey boards, darker towards the wall
+  desk.setMat(1, 0, 0, 6);
+  const fz = [[WALL_Z, 0.5], [WALL_Z + 30, 0.7], [WALL_Z + 150, 0.9], [WALL_Z + 600, 1], [R.z1, 1]];
+  surfaceGrid(desk, fz.length, 2, (i, j) => [j ? X1 : X0, fl, fz[i][0]], (i, j) => [(j ? X1 : X0) / 1024, fz[i][0] / 1024], () => [0, 1, 0],
+    { forceRef: true, col: (i) => { const k = fz[i][1]; return [0.5 * k, 0.5 * k, 0.52 * k, k]; } });
+  desk.setMat(1, 0, 0, 0); desk.setCol(1, 1, 1, 1);
+  // a steel pencil pot with pencils on one side of the tray, a jar of marbles on the other (lathed at the origin, moved)
+  const m = MB('metal'), jarR = 52, potR = 36, potH = 95, jarX = -210, potX = BOARD_W + 210;
+  const lathe = (cx, cz, rows) => { markStart(m); latheY(m, rows, 0, Math.PI * 2, 30, false, 64, cz); translateLast(m, cx, 0); };
+  put(m, [0.7, 0.71, 0.74], FIN.steel);
+  lathe(potX, 150, [[DESK_Y, potR - 2], [DESK_Y - 0.5, potR], [DESK_Y - potH + 2, potR], [DESK_Y - potH, potR - 1.5]]);
+  const pen = ['#e8453c', '#f2d23a', '#3f7fd6', '#57b347', '#f39a2b'];
+  pen.forEach((hex, k) => {
+    const a = k / pen.length * Math.PI * 2, tx = Math.cos(a) * 30, tz = Math.sin(a) * 30;
+    rod(put(m, lin(hex), FIN.satin), [[potX + tx * 0.3, top + 25, 150 + tz * 0.3], [potX + tx, top + potH + 55 + (k % 3) * 10, 150 + tz]], 3.6, 6, true);
+  });
+  put(m, [0.03, 0.03, 0.035], [2.5, 0]);
+  lathe(potX, 150, [[DESK_Y - potH + 1.5, potR - 1.5], [DESK_Y - potH + 1.5, 0.5]]);
+  // the jar: dark glass-green, a brass lid
+  put(m, [0.18, 0.34, 0.3], [0.5, 0]);
+  lathe(jarX, 190, [[DESK_Y, jarR - 4], [DESK_Y - 4, jarR], [DESK_Y - 92, jarR], [DESK_Y - 100, jarR - 6], [DESK_Y - 104, jarR - 14]]);
+  put(m, BRASS, FIN.brass);
+  lathe(jarX, 190, [[DESK_Y - 104, jarR - 13], [DESK_Y - 111, jarR - 13], [DESK_Y - 115, jarR - 17]]);
+  lathe(jarX, 190, [[DESK_Y - 115, jarR - 17], [DESK_Y - 115.1, 0.5]]);
+  m.setCol(1, 1, 1, 1); m.setMat(1, 0, 0, 0);
+}
+/* ---- A light you can see from the tower: a fluorescent light bar on the wall just above the top of the board (the way a
+ *  picture light sits over a board), emissive so it blooms, so the sunlight and the blooming strips have a source in
+ *  sight wherever the camera is near the top of the tower (the ceiling is 16000 units up and the window 5000 away: out
+ *  of reach within the camera's limits). Its housing is window-frame material, which casts no shadow, and it stands behind the
+ *  board's plane, so it neither shades nor hides the board from any angle. ---- */
+function buildPendant(wall, R) {
+  void R;
+  const w = Math.max(900, BOARD_W * 1.15), cx = BOARD_W / 2, y0 = 130, z0 = WALL_Z + 1, z1 = WALL_Z + 38;
+  const hs = MB('window');                                                                  // (the window frame's material: no mortar pattern, no shadow)
+  hs.setCol(0.16, 0.16, 0.17, 1); hs.setMat(1, 0, 0, 0);
+  boxMesh(hs, [cx - w / 2, y0, z0], [cx + w / 2, y0 + 50, z1], 64);                         // the steel housing
+  hs.setCol(1, 1, 1, 1);
+  wall.setCol(1, 0.97, 0.9, 1); wall.setMat(1, 0, 0, 7);
+  flatQuad(wall, [cx - w / 2 + 8, y0 + 6, z1 + 0.6], [cx + w / 2 - 8, y0 + 6, z1 + 0.6], [cx + w / 2 - 8, y0 + 44, z1 + 0.6], [cx - w / 2 + 8, y0 + 44, z1 + 0.6], [0, 0, 1], [0, 0], [1, 0], [1, 1], [0, 1]);   // the diffuser
+  wall.setCol(1, 1, 1, 1); wall.setMat(1, 0, 0, 0);
 }
 
 /* ---- The window the sun comes through: on the left side wall where the beam through the middle of the board meets
@@ -5996,7 +6132,11 @@ function buildRoom(rnd) {
 function buildWindow() {
   const R = roomExtent(), W = R.win, x = R.x0 + 0.5, hw = W.w / 2, hh = W.h / 2, yc = W.y, zc = W.z;
   const F = 120, D = 48, B = 30;                            // frame width, its depth off the wall, glazing bar width
-  const paint = MB('misc'); paint.setCol(0.93, 0.92, 0.9, 1); paint.setMat(1.15, 0, 1, 6);
+  // (its own material key, drawn with the 'misc' textures: bindMat falls back to them. It is NOT a shadow caster: the
+  //  frame stands thousands of units in front of the wall at a zoomed-out view and, inside cascade 1's range, painted
+  //  hard black bars across the wall and desk that disagree with the analytic window cookie (windowCookie), which
+  //  already puts the window's own shadow, mullion included, on the board and the room; see isRoomCaster)
+  const paint = MB('window'); paint.setCol(0.93, 0.92, 0.9, 1); paint.setMat(1.15, 0, 1, 6);
   const box = (y0, z0, y1, z1, d = D) => boxMesh(paint, [x, y0, z0], [x + d, y1, z1], 128);
   box(yc - hh - F, zc - hw - F, yc + hh + F, zc - hw);      // jambs
   box(yc - hh - F, zc + hw, yc + hh + F, zc + hw + F);
@@ -6108,7 +6248,12 @@ vec3 envBRDF(vec3 f0, float rough, float NoV) {
   vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
   return f0 * AB.x + AB.y;
 }
-vec3 envSpec(vec3 R, float rough) { return textureLod(uEnv, R, rough * uEnvMax).rgb; }
+vec4 envSpec4(vec3 R, float rough) { return textureLod(uEnv, R, rough * uEnvMax); }
+vec3 envSpec(vec3 R, float rough) { return envSpec4(R, rough).rgb; }
+// the cube's alpha is the room's luminance as a mirror (chrome, glass) sees it, a dim room with bright features (see envRadiance):
+// the plain room's colour at that luminance. (The colour is divided by the luminance sampled with it, so the two interpolate
+// as a tint and a level and no hairline of the plain room's survives into the mirror room.)
+vec3 envMirror(vec4 e) { return e.rgb * (e.a / max(dot(e.rgb, vec3(0.2126, 0.7152, 0.0722)), 0.02)); }
 float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 
 // Percentage-closer soft shadows: blocker search on raw depth, then hardware-bilinear PCF whose
@@ -6130,7 +6275,7 @@ float pcss(sampler2D sm, sampler2DShadow smc, mat4 smat, vec4 info, vec3 wp, vec
   for (int i = 0; i < BLOCKER_SAMPLES; i++) {
     if (i >= nb) break;
     float fi = float(i) + 0.5;
-    vec2 o = rot * vec2(cos(fi * 2.39996), sin(fi * 2.39996)) * sqrt(fi / float(nb)) * sr;
+    vec2 o = rot * vec2(cos(fi * 2.39996), sin(fi * 2.39996)) * (fi / float(nb)) * sr;   // (taps spread evenly in radius, not in area: a thin occluder just beside the pixel is found, where an area-uniform search over the whole penumbra range missed it and left lit dots in its shadow)
     float d = texture(sm, c.xy + o).r;
     if (d < zr) { bsum += d; bn += 1.0; }
   }
@@ -6149,7 +6294,9 @@ float pcss(sampler2D sm, sampler2DShadow smc, mat4 smat, vec4 info, vec3 wp, vec
     vec2 o = prot * vec2(cos(fi * 2.39996), sin(fi * 2.39996)) * sqrt(fi / float(np)) * fr;
     lit += texture(smc, vec3(c.xy + o, zr));
   }
-  return lit / float(np);
+  // (the filter's two tails are cut: a penumbra pixel with one tap lit of sixteen, or one in shadow, is sampling noise, and on a
+  //  bright satin part it glitters; the middle of the penumbra is as soft as it was)
+  return smoothstep(0.1, 0.9, lit / float(np));
 }
 float sunShadow(vec3 wp, vec3 n, float extra, float rnd) {
   bool in0, in1;
@@ -6249,11 +6396,32 @@ uniform float uNormalScale;
 uniform float uBoardRefl;  // per draw: 1 = mounted on the pegboard (reflections behind it see the board)
 uniform vec3 uBoardCol;    // the pegboard's lit colour, as reflected
 uniform float uEdgeAA;     // per draw, kept in the scene's alpha: 1 = geometry whose edges FXAA may smooth, 0 = a big textured surface
+uniform float uPeg;        // per draw: 1 = the pegboard (its holes, rims and the view down them are worked out here, exactly, at any zoom)
+uniform float uWall;       // per draw: 1 = the block wall (mortar joints worked out here)
+uniform float uDetail;     // per draw: strength of the fine detail normal layer (the wall)
+uniform sampler2D uContact;    // R8, board space: contact occlusion under every foot, plate and tube (see updateContact)
+uniform vec4 uContactInfo;     // x, y: board offset of the map, z, w: 1 / (map size in board units)
+uniform sampler2D uPegAlb;     // the pegboard's albedo: what the pieces mounted on it mirror
+uniform sampler2D uPegHole;    // its hole pattern, one 20-unit cell, mipmapped (see pegSeen)
+uniform sampler2D uDetailTex;  // a fine normal tile (the wall's detail layer)
+uniform vec4 uBoardRect;       // the pegboard's edges in board units (y down): x0, y0, x1, y1
 #ifdef DEBUG
 uniform int uDebug;
 #endif
 in vec3 vPos; in vec3 vNrm; in vec4 vTan; in vec2 vUv; in vec4 vCol; in vec4 vMat; in float vGlow; flat in vec3 vGlowCol;
 out vec4 outColor;
+// The pegboard: a hole every 20 board units (the snap grid), 3.7 units in radius, right through a 9-unit board
+const float HOLE_R = 3.7, HOLE_PITCH = 20.0, BOARD_THICK = 9.0;
+// The pegboard as a pieces' reflection sees it at board point b (y down): the hole pattern, from a one-cell mipmapped,
+// anisotropic tile (genPegHoleTile: hole, bevel and board, the hole in the middle). A reflection squeezed by a curved piece
+// is averaged by the hardware along the long side of the pixel's footprint (bdx, bdy on the board), so the holes keep their
+// pitch along a rod and smear across it, and the pattern is its mean PEG_MEAN when the footprint spans several pitches. A
+// rough piece blurs it by aa units more.
+const float PEG_MEAN = 0.87;
+float pegSeen(vec2 b, vec2 bdx, vec2 bdy, float aa) {
+  float g = aa / HOLE_PITCH;
+  return textureGrad(uPegHole, (b + 10.0) / HOLE_PITCH, bdx / HOLE_PITCH + vec2(g, 0.0), bdy / HOLE_PITCH + vec2(0.0, g)).r;
+}
 void main() {
   float flag = vMat.w;
   if ((flag > 4.5 && flag < 5.5) || flag > 6.5) {            // emissive (the ceiling's light strips): its own light, no shading
@@ -6273,14 +6441,59 @@ void main() {
   else { albedo = alb.rgb * vCol.rgb; ao = alb.a * vCol.a; }
   vec3 N0 = normalize(vNrm);
   if (!gl_FrontFacing) N0 = -N0;
+  // the block wall (uWall): mortar joints between 500 x 250 blocks (11 units wide, odd courses shifted by half a block),
+  // worked out from the position so they stay crisp at any zoom, and a fine detail normal layer; far away, where a
+  // pixel is wider than a joint, they average out to their mean coverage. Mortar is a shade darker and rougher, with a
+  // little occlusion along its edges and a tilt of the block's edge into the joint. Mortar lines run on across the
+  // corner into the side walls (the courses depend on the height alone).
+  float wallM = 0.0;
+  vec3 wallTilt = vec3(0.0);
+  vec2 detUv = vec2(0.0);
+  if (uWall > 0.5) {
+    vec3 an = abs(N0);
+    float tb = -vPos.y;                                             // board y (down), as the wall texture's rows run
+    float sc = an.z > 0.5 ? vPos.x : vPos.z + 1850.0 * sign(N0.x);   // (the side walls' texture is shifted 0.37 of a tile: keep the joints on the blocks it paints)
+    detUv = an.y > 0.5 ? vec2(vPos.x, vPos.z) : vec2(sc, tb);
+    vec2 fw = fwidth(vec2(sc, tb));                                 // (derivatives outside the branch below: it is not uniform across a quad)
+    if (an.y < 0.5) {                                               // (the plaster ceiling has no joints)
+      float row = floor(tb / 250.0);
+      float sx = mod(sc - mod(row, 2.0) * 250.0 + 255.5, 500.0) - 250.0, sy = mod(tb + 130.5, 250.0) - 125.0;
+      float ax = abs(sx), ay = abs(sy);
+      float far = smoothstep(6.0, 22.0, max(fw.x, fw.y));
+      wallM = max(1.0 - smoothstep(5.5 - 0.5 * fw.x, 5.5 + 0.5 * fw.x, ax), 1.0 - smoothstep(5.5 - 0.5 * fw.y, 5.5 + 0.5 * fw.y, ay));
+      wallM = mix(wallM, 0.07, far);
+      float edgeO = max(1.0 - smoothstep(5.5, 11.5, ax), 1.0 - smoothstep(5.5, 11.5, ay));
+      albedo = mix(albedo, albedo * 0.8, wallM);
+      ao *= 1.0 - 0.12 * mix(edgeO, 0.1, far);
+      float kx = smoothstep(5.0, 5.7, ax) * (1.0 - smoothstep(5.7, 8.5, ax)), ky = smoothstep(5.0, 5.7, ay) * (1.0 - smoothstep(5.7, 8.5, ay));
+      vec2 tl = vec2(-sign(sx) * kx, sign(sy) * ky) * 0.7 * (1.0 - far);
+      wallTilt = an.z > 0.5 ? vec3(tl.x, tl.y, 0.0) : vec3(0.0, tl.y, tl.x);
+    }
+  }
+  // the pegboard (uPeg): holes drawn analytically (a distance to the nearest hole centre, exactly anti-aliased at any
+  // zoom), a darker bevel and occlusion ring round each, and the view down each bore traced below
+  vec2 pb = vec2(vPos.x, -vPos.y), pq = vec2(0.0);
+  float pd = 99.0, pegIn = 0.0, contact = 1.0;
+  if (uPeg > 0.5) {
+    contact = texture(uContact, (pb + uContactInfo.xy) * uContactInfo.zw).r;
+    pq = (fract((pb + 10.0) / HOLE_PITCH) - 0.5) * HOLE_PITCH;
+    pd = length(pq);
+    vec2 pu = pq / max(pd, 1e-4);
+    float paa = max(0.5 * (abs(dot(pu, dFdx(pb))) + abs(dot(pu, dFdy(pb)))), 0.02);
+    pegIn = 1.0 - smoothstep(HOLE_R - paa, HOLE_R + paa, pd);
+    albedo *= 1.0 - 0.18 * (1.0 - smoothstep(HOLE_R, HOLE_R + 1.3, pd));
+  }
   vec3 T = vTan.xyz - N0 * dot(N0, vTan.xyz);
   T = dot(T, T) > 1e-8 ? normalize(T) : vec3(1.0, 0.0, 0.0);
   vec3 B = cross(N0, T) * vTan.w;
   vec2 nxy = (surf.xy * 2.0 - 1.0) * uNormalScale * engr;
-  vec3 N = normalize(T * nxy.x + B * nxy.y + N0 * sqrt(max(1.0 - dot(nxy, nxy), 0.05)));
-  float rough = clamp(surf.z * vMat.x, 0.04, 1.0);
+  nxy *= 1.0 - 0.8 * (1.0 - smoothstep(0.06, 0.2, clamp(surf.z * vMat.x, 0.04, 1.0)));   // (polished chrome keeps only a trace of the brushed grain: against a bright and dark room its texel noise would glitter)
+  if (uDetail > 0.0) nxy += (texture(uDetailTex, detUv / 24.0).xy * 2.0 - 1.0) * uDetail;
+  vec3 N = normalize(T * nxy.x + B * nxy.y + N0 * sqrt(max(1.0 - dot(nxy, nxy), 0.05)) + wallTilt);
+  float rough = clamp(surf.z * vMat.x, 0.04, 1.0), rough0 = rough;   // (rough0: the surface's own; rough also covers the curvature under a pixel)
   vec3 dn = fwidth(N0);
   rough = sqrt(rough * rough + min(dot(dn, dn) * 0.6, 0.2));
+  rough = min(rough + 0.15 * wallM, 1.0);
   float metal = vMat.y;
   vec3 V = normalize(uCamPos - vPos);
   float NoV = clamp(dot(N, V), 1e-4, 1.0);
@@ -6304,19 +6517,58 @@ void main() {
     float wrap = flag > 3.5 && flag < 4.5 ? 0.3 : 0.0;            // glue: a hint of translucency
     vec3 diff = diffC / PI * (1.0 - F);
     direct = (diff * clamp((NoL + wrap) / (1.0 + wrap), 0.0, 1.0) + spec * NoL) * uSunCol * sh * mT;
+    direct *= mix(1.0, contact, 0.6);                       // (next to a plate or foot the board also sees less of the sun's big disc: the contact map takes part of it too)
   }
   // ambient: SH irradiance + prefiltered environment, occluded by the baked AO and nearby marbles
   float occ = ao * mao;
+  if (uPeg > 0.5) occ *= contact * (1.0 - 0.45 * (1.0 - smoothstep(HOLE_R, HOLE_R + 1.8, pd)) * (1.0 - pegIn));
   vec3 irr = shIrradiance(N);
   if (flag > 5.5) irr += vec3(0.62, 0.59, 0.54) + vec3(0.55, 0.45, 0.32) * max(-N.y, 0.0);   // the room's far surfaces (side walls, ceiling, desk): daylight bounced round the room, the sunlit desk's warm bounce up on the ceiling
+  // (pieces on the board also catch the light bounced up from the sunlit desk and the board: the SH keeps the desk dim, and
+  //  the undersides of matt and satin parts would go black)
+  irr += uBoardRefl * vec3(0.62, 0.52, 0.4) * (0.3 + 0.7 * max(-N.y, 0.0));
   vec3 envB = envBRDF(f0, rough, NoV);
   vec3 R = reflect(-V, N);
   float horizon = clamp(1.0 + 1.3 * dot(R, N0), 0.0, 1.0);
-  vec3 envC = envSpec(R, rough);
-  // a metal piece mounted on the board mirrors the board behind it, not the room behind the camera
-  // (and a soft bright ceiling in the reflection: the room above the board is brighter than the env model's)
-  envC = envC * (1.0 + 0.6 * uBoardRefl) + uBoardRefl * vec3(0.4, 0.39, 0.37) * smoothstep(-0.05, 0.8, R.y);
-  envC = mix(envC, uBoardCol * (0.55 + 0.45 * sh), uBoardRefl * smoothstep(0.1, -0.35, R.z) * 0.5);
+  // (specular anti-aliasing: the angle one pixel's reflection sweeps, as the cube level whose edges are that soft: a thin rod
+  //  turns its whole reflected room under a few pixels, and sharp lights and walls would alias into hairlines on it)
+  float fpR = max(length(dFdx(R)), length(dFdy(R)));
+  float envRough = max(rough, min(4.0 * sqrt(max(0.5 * fpR - 0.012, 0.0) / 0.8), uEnvMax) / uEnvMax);
+  vec4 envC4 = envSpec4(R, envRough);
+  vec3 envC = envC4.rgb;
+  // A mirror (chrome, glass: rough < 0.06 .. 0.2) shows the room as it is, its bright lights and its dim walls (the cube's alpha:
+  // envMirror); every other piece keeps the pale daylit room, lifted a little (and a soft bright ceiling: the room above the
+  // board is brighter than the env model's).
+  float mirror = 1.0 - smoothstep(0.06, 0.2, rough);
+  envC = mix(envC, envMirror(envC4), mirror);
+  envC = envC * (1.0 + 0.6 * uBoardRefl * (1.0 - mirror)) + uBoardRefl * (1.0 - mirror) * vec3(0.4, 0.39, 0.37) * smoothstep(-0.05, 0.8, R.y);
+  // A piece mounted on the board mirrors the board behind it where its reflected ray goes into it: the real board, the point
+  // bp where the ray meets the board's plane, with its grain, the hole pattern there, the sun patch on it and the foot plates'
+  // contact shade; beyond the board's edge, the wall. The pattern is blurred by the piece's roughness over the distance the ray
+  // travels and filtered over the pixel's footprint on the board (bdx, bdy), so it never aliases: it is its mean where the
+  // reflection is stretched (grazing, the piece's silhouette).
+  if (uBoardRefl > 0.5) {
+    float tB = -vPos.z / min(R.z, -0.05);                              // distance along R to the board's plane
+    vec2 bp = vec2(vPos.x, -vPos.y) + vec2(R.x, -R.y) * tB;
+    vec2 bdx = dFdx(bp), bdy = dFdy(bp);                                // (derivatives out here: uBoardRefl is uniform per draw)
+    float bw = mix(smoothstep(0.35, -0.25, R.z) * 0.5, smoothstep(0.3, -0.2, R.z) * 0.95, mirror);   // (a mirror sees the board wherever its reflected ray goes into it)
+    if (bw > 0.002) {
+      float edge = smoothstep(0.02, 0.2, dot(N0, V)) * smoothstep(0.0, -0.15, R.z);   // (no pattern at the piece's silhouette or a grazing reflection)
+      float aa = 0.5 + tB * rough0 * 0.9;                               // (a rough surface blurs what is far behind it)
+      float gw = max(exp2(rough0 * 5.0), 6.0);                           // (the grain's filter footprint, in units: the pixel's, widened by the roughness and by at least 6: the grain's texels, seen along a rod, would be beads)
+      float pl = dot(textureGrad(uPegAlb, (bp + 10.0) / 320.0, (bdx + vec2(gw, 0.0)) / 320.0, (bdy + vec2(0.0, gw)) / 320.0).rgb, vec3(0.3, 0.59, 0.11)) / 0.23;
+      float pat = mix(PEG_MEAN, pegSeen(bp, bdx, bdy, aa), edge);
+      pat = clamp(PEG_MEAN + (pat - PEG_MEAN) * mix(1.0, 1.8, mirror), 0.04, 1.1);   // (a mirror's squeezed holes are drawn a little bolder than their true average, so a soft dash reads at 1:1)
+      float lit = 0.5 + 0.55 * windowCookie(vec3(bp.x, -bp.y, 0.0), uSunDir);                      // the sun patch on the board there
+      float cs = mix(1.0, texture(uContact, (bp + uContactInfo.xy) * uContactInfo.zw).r, 0.8);    // the plates' and feet's contact shade
+      // (under an overhang what a face mirrors is brightened by the bounces between it and the plate and board below it)
+      float bounce = 1.0 + 0.9 * (1.0 - mirror) * smoothstep(0.2, 0.8, -N0.y);
+      vec3 bc = uBoardCol * mix(1.0, pl, 0.7 * edge) * pat * lit * cs * bounce;
+      vec2 inB = smoothstep(uBoardRect.xy - 12.0, uBoardRect.xy + 12.0, bp) * (1.0 - smoothstep(uBoardRect.zw - 12.0, uBoardRect.zw + 12.0, bp));
+      bc = mix(vec3(0.2, 0.19, 0.17), bc, inB.x * inB.y);
+      envC = mix(envC, bc, bw);
+    }
+  }
   vec3 spec = envC * envB * horizon * horizon;
   float specOcc = clamp(pow(NoV + occ, exp2(-16.0 * rough - 1.0)) - 1.0 + occ, 0.0, 1.0);
   vec3 ambient = diffC * irr / PI * occ * (1.0 - envB * 0.5) + spec * specOcc;
@@ -6325,10 +6577,29 @@ void main() {
   float flash = vGlow * vGlow * vGlow;
   vec3 col = direct * (1.0 + 0.8 * flash) + ambient + spec * specOcc * 1.6 * flash;
   col += vGlowCol * vGlow * (pow(1.0 - NoV, 2.0) * 0.9 + 0.06);
+  // looking down a pegboard hole: the ray from the eye enters at this fragment and either meets the bore's wall (lit
+  // by the sun where its ray out of the hole stays inside the bore, ambient dimmer the deeper it is) or leaves by the
+  // open back, the gap's shade
+  if (pegIn > 0.0) {
+    vec2 m = vec2(-V.x, V.y) / max(abs(V.z), 0.05);                // board-space shift per unit of depth
+    float c = min(dot(pq, pq) - HOLE_R * HOLE_R, 0.0), mm = dot(m, m), qm = dot(pq, m);
+    float tHit = mm > 1e-6 ? (-qm + sqrt(max(qm * qm - mm * c, 0.0))) / mm : 1e5;
+    vec3 holeC;
+    if (tHit < BOARD_THICK) {
+      vec2 h = pq + m * tHit;
+      vec3 nw = vec3(-h.x, h.y, 0.0) / HOLE_R;                     // the wall's normal, towards the bore's axis
+      float lit = 1.0 - smoothstep(HOLE_R - 0.6, HOLE_R + 0.6, length(h + vec2(L.x, -L.y) / max(L.z, 0.05) * tHit));
+      vec3 wc = albedo * 0.62;
+      float deep = 1.0 - 0.7 * tHit / BOARD_THICK;                // (the deeper the wall, the less light gets down there)
+      holeC = wc / PI * (max(dot(nw, L), 0.0) * uSunCol * sh * lit * deep + (shIrradiance(nw) + vec3(0.5, 0.47, 0.42)) * deep * deep * 0.5);   // (+ the daylight bounced round the room, as on the room's far surfaces)
+    } else holeC = (albedo * 0.5 + 0.05) * 0.2;                    // (the open back: the dim wall in the gap)
+    col = mix(col, holeC, pegIn);
+  }
 #ifdef DEBUG
   if (uDebug == 1) col = vec3(sh);                          // inspection: key-light visibility only
   if (uDebug == 2) col = envC;                              // inspection: the reflected room
   if (uDebug == 3) col = vec3(specOcc, occ, horizon);      // inspection: reflection occlusion terms
+  if (uDebug == 4) col = vec3(contact);                    // inspection: the board's contact-occlusion map
 #endif
   outColor = encodeScene(col);
   outColor.a = uEdgeAA;
@@ -6678,6 +6949,7 @@ function initGL(canvas) {
   if (!compilePrograms()) return false;
   GLR.sphere = buildSphereMesh(gl);
   INST.tex = null; INST.rows = 0;
+  CONTACT.tex = null; CONTACT.key = '';                     // (a fresh GL context: the contact map is made again)
   GLR.quadVao = gl.createVertexArray();
   GLR.shadow = [glShadowTarget(gl, GLR.shadowSize), glShadowTarget(gl, GLR.shadowSize)];
   GLR.cmpSampler = gl.createSampler();
@@ -6766,6 +7038,7 @@ async function buildGLAssets(onProgress) {
   if (!(await run('env', () => genEnvironment(gl, envOut)))) return false;
   GLR.env = envOut.env;
   step();
+  if (!(await run('holes', () => { GLR.pegHole = genPegHoleTile(gl); }))) return false;
   SCENE.builders = {};
   const board = BOARD_W + 'x' + BOARD_H;
   if (!(await run('scene', buildScene))) return false;
@@ -6864,6 +7137,13 @@ function glTargets(w, h) {
   const key = w + 'x' + h;
   let t = TARGET_CACHE.get(key);
   if (!t) { t = makeTargets(w, h); if (t) TARGET_CACHE.set(key, t); }
+  if (!t) return t;
+  // Adaptive quality steps the render scale under one canvas size, which used to keep every earlier (bigger) set
+  // (+31 MB on a desktop, +25 MB on a DPR 2 phone): keep the current set and one spare, the next larger one (the way
+  // back up when the frame rate recovers), and free the rest
+  let spare = null;
+  for (const [k, o] of TARGET_CACHE) if (k !== key && o.w >= w && o.h >= h && (!spare || o.w * o.h < spare[1].w * spare[1].h)) spare = [k, o];
+  for (const [k, o] of [...TARGET_CACHE]) if (k !== key && !(spare && spare[0] === k)) { freeTargets(o); TARGET_CACHE.delete(k); }
   return t;
 }
 function makeTargets(w, h) {
@@ -7022,7 +7302,7 @@ function layout3D() {
   FIT = fitCamera(view.w, view.h, boardFitRect());
   applyCamera();
   resizeCanvases();
-  SHADOW.view = null;
+  SHADOW.view = null; SHMOVE.hist.length = 0;
   updateShadowRegion();
   setupWindowLight();
   GLR.layoutEpoch++;
@@ -7033,7 +7313,10 @@ function applyCamera() {
   if (!FIT) return;
   const z = VIEWCAM.zoom, D = FIT.D / z, tg = [FIT.target[0] + VIEWCAM.panX, FIT.target[1] - VIEWCAM.panY, FIT.target[2]];
   const yaw = clamp(CAMERA.yaw + CAMERA.autoYaw, -CAMERA.yawMax, CAMERA.yawMax);
-  const pitch = clamp(CAMERA.pitch + CAMERA.autoPitch, pitchFloor(tg[1], D), CAMERA.pitchMax);
+  const floor = pitchFloor(tg[1], D), pitch = clamp(CAMERA.pitch + CAMERA.autoPitch, floor, CAMERA.pitchMax);
+  // (a pitch the desk forces up is written back: the stored angle is the one on screen, so a drag or a key press
+  //  tilts from where the view is, not from an angle the floor hid; withFrontCam puts its own values back)
+  if (CAMERA.pitch + CAMERA.autoPitch < floor) CAMERA.pitch = pitch - CAMERA.autoPitch;
   const c = FIT.build(D, FIT.sx, FIT.sy, tg, camDir(yaw, pitch));
   GLR.cam = { eye: c.eye, target: tg, view: c.viewM, proj: c.proj, vp: c.vp, inv: M4.invert(c.vp), D, fovY: FIT.fovY, yaw, pitch };
   VIEWCAM.version++;
@@ -7106,15 +7389,38 @@ function visibleBoardRect() {
 // Fit the cascades to the view when it has left the region they cover (or zoomed well in); true when they moved.
 // From an oblique angle the visible region grows; cascade 0 (the sharp one) keeps to 1.6 spans round the target and
 // the wider cascade 1 covers the rest, so a tilted view stays sharp where the eye is and cheap.
+// While the view is being turned by hand (an orbit, a glide, a spin, the Cinematic swing) the visible region changes
+// its shape every frame, and refitting at every small change redrew the maps 71 times in 30 s of orbiting (7 for a
+// follow): so while the camera moves the region takes a wider margin (0.8 of the view) and the union of the last ten
+// visible rects, a region that is left is still refitted at once (coverage never lapses) but a region that has merely
+// become too big waits until the camera has been still for 300 ms (SHMOVE).
+const SHMOVE = { t: -1e9, still: 0, hist: [], pending: false, margin: 0.8, reach: 1.5 };
 function updateShadowRegion() {
   if (!GLR.cam.inv || !view.w) return false;
-  const v = visibleBoardRect(), size = Math.max(v.x1 - v.x0, v.y1 - v.y0), R = SHADOW.view;
-  if (R && v.x0 >= R.x0 && v.x1 <= R.x1 && v.y0 >= R.y0 && v.y1 <= R.y1 && size > 0.6 * R.size) return false;
-  const m = Math.min(v.y1 - v.y0, v.sh) * 0.3 + 60, r = { x0: v.x0 - m, x1: v.x1 + m, y0: v.y0 - m, y1: v.y1 + m, size };
+  let v = visibleBoardRect();
+  const R = SHADOW.view, now = performance.now(), moving = cameraMoving();
+  if (moving) { SHMOVE.t = now; SHMOVE.still = 0; } else SHMOVE.still++;
+  const hist = SHMOVE.hist;
+  let size = Math.max(v.x1 - v.x0, v.y1 - v.y0);
+  const last = hist[hist.length - 1];
+  // (a jump of the view, a new board or a Fit, is not a motion to cover: forget the rects before it)
+  if (last) { const ls = Math.max(last.x1 - last.x0, last.y1 - last.y0); if (Math.abs(v.cx - last.cx) + Math.abs(v.cy - last.cy) > 0.5 * Math.max(v.sw, v.sh) || size > 2.2 * ls || size < ls / 2.2) hist.length = 0; }
+  hist.push(v); if (hist.length > 10) hist.shift();
+  const inside = !!R && v.x0 >= R.x0 && v.x1 <= R.x1 && v.y0 >= R.y0 && v.y1 <= R.y1;
+  SHMOVE.pending = false;
+  if (inside && size > 0.6 * R.size) return false;
+  // (too big, but the camera has only just stopped: still for 300 ms, or 18 frames, whichever comes first)
+  if (inside && SHMOVE.still < 18 && (now - SHMOVE.t < 300 || SHMOVE.still < 2)) { SHMOVE.pending = true; return false; }
+  if (moving) {
+    v = Object.assign({}, v);
+    for (const h of hist) { v.x0 = Math.min(v.x0, h.x0); v.x1 = Math.max(v.x1, h.x1); v.y0 = Math.min(v.y0, h.y0); v.y1 = Math.max(v.y1, h.y1); }
+    size = Math.max(v.x1 - v.x0, v.y1 - v.y0);
+  } else hist.length = 0;
+  const m = Math.min(v.y1 - v.y0, v.sh) * (moving ? SHMOVE.margin : 0.3) + 60, r = { x0: v.x0 - m, x1: v.x1 + m, y0: v.y0 - m, y1: v.y1 + m, size };
   SHADOW.view = r;
   SHADOW.cull = { x0: r.x0 - 120, x1: r.x1 + 120, y0: r.y0 - 120, y1: r.y1 + 120 };
   // cascade 0: the pegboard, its frame and the trough, where they are in the region (quantised sizes: see above)
-  const kx = 1.6 * v.sw, ky = 1.6 * v.sh;
+  const kk = moving ? SHMOVE.reach : 1.6, kx = kk * v.sw, ky = kk * v.sh;       // (a little tighter while the camera moves: the texel stays within 2 x the still one)
   const b0x0 = clamp(Math.max(r.x0, v.cx - kx), -60, BOARD_W + 60), b0x1 = clamp(Math.min(r.x1, v.cx + kx), -60, BOARD_W + 60);
   const b0y0 = clamp(Math.max(r.y0, v.cy - ky), -60, TROUGH.y1 + 20), b0y1 = clamp(Math.min(r.y1, v.cy + ky), -60, TROUGH.y1 + 20);
   GLR.sf0 = lightFrustum(boxPts(b0x0, Math.max(b0x1, b0x0 + 1), -b0y0, -Math.max(b0y1, b0y0 + 1), -8, 80), 64);
@@ -7142,7 +7448,7 @@ function setupWindowLight() {
 const SUN_COL = [4.1, 3.8, 3.3];
 const LIGHT_TAN = 0.1;
 const EXPOSURE = 1.18;
-const BOARD_REFL = [0.32, 0.26, 0.19];
+const BOARD_REFL = [0.45, 0.34, 0.22];
 let MARBLE_DATA = new Float32Array(0), MARBLE_COL = new Float32Array(0);   // the shadow casters (sized in initGL)
 const MARBLE_COLORS = [
   { glass: '#4f9be8', swirl: '#ff7a2e' }, { glass: '#e24a4a', swirl: '#ffe066' }, { glass: '#3fbf7f', swirl: '#ffffff' },
@@ -7367,6 +7673,98 @@ function frameInstances() {
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, rows, gl.RGBA, gl.FLOAT, D, 0);
 }
 
+/* ---- Contact occlusion on the pegboard ----
+ *  Where a plate, foot or tube meets the board the ambient light is darker all round it, not only under it (the sun's
+ *  own shadow is the PCSS one, offset down and to the right): a soft board-space map, 1 texel = 4 board units (R8,
+ *  e.g. 205 x 1175 for a 800 x 4680 tower, 4 MB at 4000 x 16000), looked up by the pegboard's shader. Every piece's
+ *  footprint (its colliders widened by the hardware it stands on) is splatted as 1 - 0.45 * smoothstep(R + 7, R - 1,
+ *  distance). It is updated only where a piece was added, moved, changed or removed (a dirty rectangle: the new and old
+ *  footprints), and the piece being dragged (EDIT.lifted) is left out, so a drag costs nothing and does not smear. */
+const CONTACT = { tex: null, tw: 0, th: 0, data: null, ents: new Map(), key: '', ver: -1, lifted: null, info: new Float32Array(4) };
+const CONTACT_PX = 4, CONTACT_DARK = 0.45;
+const CONTACT_FOOT = { bar: 8, rail: 3, curve: 3, wall: 3, spring: 5, funnel: 4 };     // how far the plate or feet reach past the collider
+// A piece's footprint on the board: capsules { ax, ay, bx, by, R } (board units; a circle has a = b)
+function contactShapes(p) {
+  if (p.type === 'dropper') return [{ ax: p.x, ay: p.y - 70, bx: p.x, by: p.y - 18, R: 13 }];
+  if (p.type === 'bucket') { const a = (p.rot || 0) * RAD, c = Math.cos(a) * 8, s = Math.sin(a) * 8; return [{ ax: p.x - c, ay: p.y - s, bx: p.x + c, by: p.y + s, R: 30 }]; }
+  const foot = CONTACT_FOOT[p.type] || 3, out = [];
+  for (const c of CANON.colliders(p)) {
+    if (c.shape === 'circle') out.push({ ax: c.x, ay: c.y, bx: c.x, by: c.y, R: c.r + 4.5 });
+    else out.push({ ax: c.ax, ay: c.ay, bx: c.bx, by: c.by, R: c.hw + foot });
+  }
+  return out;
+}
+const contactSame = (e, p) => e.type === p.type && e.x === p.x && e.y === p.y && e.rot === p.rot && e.len === p.len && e.r === p.r && e.sweep === p.sweep && e.w === p.w && e.h === p.h;
+function contactBox(shapes) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const q of shapes) { const m = q.R + 8; x0 = Math.min(x0, q.ax - m, q.bx - m); y0 = Math.min(y0, q.ay - m, q.by - m); x1 = Math.max(x1, q.ax + m, q.bx + m); y1 = Math.max(y1, q.ay + m, q.by + m); }
+  return shapes.length ? [x0, y0, x1, y1] : null;
+}
+function updateContact() {
+  const gl = GLR.gl, C = CONTACT, tw = Math.ceil((BOARD_W + 2 * BOARD_PAD) / CONTACT_PX), th = Math.ceil((BOARD_H + 2 * BOARD_PAD) / CONTACT_PX), key = tw + 'x' + th;
+  if (C.tex && C.key === key && C.ver === MODEL.version && C.lifted === EDIT.lifted) return;
+  let dirty = null;                                               // texel rectangle [x0, y0, x1, y1] to rebuild
+  const add = (b) => {
+    if (!b) return;
+    const r = [Math.max(0, Math.floor((b[0] + BOARD_PAD) / CONTACT_PX)), Math.max(0, Math.floor((b[1] + BOARD_PAD) / CONTACT_PX)), Math.min(tw - 1, Math.floor((b[2] + BOARD_PAD) / CONTACT_PX)), Math.min(th - 1, Math.floor((b[3] + BOARD_PAD) / CONTACT_PX))];
+    if (r[2] < r[0] || r[3] < r[1]) return;
+    if (!dirty) dirty = r; else { dirty[0] = Math.min(dirty[0], r[0]); dirty[1] = Math.min(dirty[1], r[1]); dirty[2] = Math.max(dirty[2], r[2]); dirty[3] = Math.max(dirty[3], r[3]); }
+  };
+  if (!C.tex || C.key !== key) {                                  // (first time, a new board size, a new GL context)
+    if (C.tex && gl.isTexture(C.tex)) gl.deleteTexture(C.tex);
+    C.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, C.tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R8, tw, th);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    C.data = new Uint8Array(tw * th).fill(255); C.ents = new Map(); C.key = key; C.tw = tw; C.th = th;
+    C.info.set([BOARD_PAD, BOARD_PAD, 1 / (tw * CONTACT_PX), 1 / (th * CONTACT_PX)]);
+    dirty = [0, 0, tw - 1, th - 1];
+  }
+  // what changed: pieces added, moved or altered, taken away, picked up or put down (old and new footprints)
+  const cur = new Map();
+  for (const p of MODEL.pieces) {
+    const lifted = EDIT.lifted === p.id, old = C.ents.get(p.id);
+    if (old && old.lifted === lifted && (lifted || contactSame(old, p))) { cur.set(p.id, old); continue; }
+    const shapes = lifted ? [] : contactShapes(p), e = { lifted, shapes, box: contactBox(shapes), type: p.type, x: p.x, y: p.y, rot: p.rot, len: p.len, r: p.r, sweep: p.sweep, w: p.w, h: p.h };
+    cur.set(p.id, e);
+    if (old) add(old.box);
+    add(e.box);
+  }
+  for (const [id, old] of C.ents) if (!cur.has(id)) add(old.box);
+  C.ents = cur; C.ver = MODEL.version; C.lifted = EDIT.lifted;
+  if (!dirty) return;
+  const [x0, y0, x1, y1] = dirty, D = C.data;
+  for (let y = y0; y <= y1; y++) D.fill(255, y * tw + x0, y * tw + x1 + 1);
+  for (const e of cur.values()) {
+    if (!e.box) continue;
+    const bx0 = Math.max(x0, Math.floor((e.box[0] + BOARD_PAD) / CONTACT_PX)), by0 = Math.max(y0, Math.floor((e.box[1] + BOARD_PAD) / CONTACT_PX));
+    const bx1 = Math.min(x1, Math.floor((e.box[2] + BOARD_PAD) / CONTACT_PX)), by1 = Math.min(y1, Math.floor((e.box[3] + BOARD_PAD) / CONTACT_PX));
+    if (bx1 < bx0 || by1 < by0) continue;
+    for (const q of e.shapes) {
+      const m = q.R + 8, sx0 = Math.max(bx0, Math.floor((Math.min(q.ax, q.bx) - m + BOARD_PAD) / CONTACT_PX)), sx1 = Math.min(bx1, Math.floor((Math.max(q.ax, q.bx) + m + BOARD_PAD) / CONTACT_PX));
+      const sy0 = Math.max(by0, Math.floor((Math.min(q.ay, q.by) - m + BOARD_PAD) / CONTACT_PX)), sy1 = Math.min(by1, Math.floor((Math.max(q.ay, q.by) + m + BOARD_PAD) / CONTACT_PX));
+      const abx = q.bx - q.ax, aby = q.by - q.ay, l2 = abx * abx + aby * aby;
+      for (let ty = sy0; ty <= sy1; ty++) {
+        const py = (ty + 0.5) * CONTACT_PX - BOARD_PAD;
+        for (let tx = sx0; tx <= sx1; tx++) {
+          const px = (tx + 0.5) * CONTACT_PX - BOARD_PAD;
+          let u = l2 > 1e-6 ? ((px - q.ax) * abx + (py - q.ay) * aby) / l2 : 0; u = u < 0 ? 0 : u > 1 ? 1 : u;
+          const t = (q.R + 7 - Math.hypot(px - q.ax - abx * u, py - q.ay - aby * u)) / 8;
+          if (t <= 0) continue;
+          const k = t >= 1 ? 1 : t * t * (3 - 2 * t), v = Math.round(255 * (1 - CONTACT_DARK * k)), i = ty * tw + tx;
+          if (v < D[i]) D[i] = v;
+        }
+      }
+    }
+  }
+  gl.activeTexture(gl.TEXTURE9);
+  gl.bindTexture(gl.TEXTURE_2D, C.tex);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.UNPACK_ROW_LENGTH, tw); gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, x0); gl.pixelStorei(gl.UNPACK_SKIP_ROWS, y0);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, x0, y0, x1 - x0 + 1, y1 - y0 + 1, gl.RED, gl.UNSIGNED_BYTE, D);
+  gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0); gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0); gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+}
+
 function setCommon(p) {
   const gl = GLR.gl, u = p.u, c = GLR.cam, w = GLR.win;
   gl.useProgram(p.p);
@@ -7384,6 +7782,11 @@ function setCommon(p) {
   if (u.uMarbleRange) gl.uniform2i(u.uMarbleRange, 0, GLR.shadowCount);
   if (u.uInst) { gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, INST.tex); gl.uniform1i(u.uInst, 8); }
   if (u.uBoardCol) gl.uniform3fv(u.uBoardCol, BOARD_REFL);
+  if (u.uBoardRect) gl.uniform4f(u.uBoardRect, -BOARD_PAD, -BOARD_PAD, BOARD_W + BOARD_PAD, BOARD_H + BOARD_PAD);
+  if (u.uContact && CONTACT.tex) { gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, CONTACT.tex); gl.uniform1i(u.uContact, 9); gl.uniform4fv(u.uContactInfo, CONTACT.info); }
+  if (u.uPegAlb && GLR.mats.peg) { gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, GLR.mats.peg.alb); gl.uniform1i(u.uPegAlb, 10); }
+  if (u.uPegHole && GLR.pegHole) { gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, GLR.pegHole); gl.uniform1i(u.uPegHole, 12); }
+  if (u.uDetailTex && GLR.mats.misc) { gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, GLR.mats.misc.surf); gl.uniform1i(u.uDetailTex, 11); }
   if (u.uWinU) { gl.uniform4fv(u.uWinU, w.U); gl.uniform4fv(u.uWinV, w.V); gl.uniform4fv(u.uWinRect, w.rect); gl.uniform4fv(u.uWinBars, w.bars); }
   if (u.uWinFold) gl.uniform4fv(u.uWinFold, w.fold);
   if (u.uEnv) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_CUBE_MAP, GLR.env.tex); gl.uniform1i(u.uEnv, 2); }
@@ -7406,7 +7809,8 @@ function bindMat(p, mat, big) {
   if (u.uNormalScale) gl.uniform1f(u.uNormalScale, mt.nscale);
   if (u.uTaps) gl.uniform1i(u.uTaps, big ? Math.min(GLR.taps, GLR.lite ? 8 : 12) : GLR.taps);
 }
-const isRoomCaster = (m) => m.mat !== 'wall' && m.mat !== 'desk';
+// (the wall, the desk and the window's frame are lit by the analytic window cookie, never drawn into the shadow maps)
+const isRoomCaster = (m) => m.mat !== 'wall' && m.mat !== 'desk' && m.mat !== 'window';
 const PIECE_MATS = ['metal', 'misc', 'letters'];
 // (the per-frame loops below index their arrays: a for-of iterator is garbage until the function is optimised)
 // Draw the room meshes, then the pieces (grouped by material, one instanced draw per mesh), with or without textures
@@ -7418,13 +7822,19 @@ function drawAll(p, withTextures, casterOnly) {
     const m = GLR.meshes[i];
     if (casterOnly && !isRoomCaster(m)) continue;
     const big = m.mat === 'wall' || m.mat === 'desk' || m.mat === 'peg';
-    if (withTextures) bindMat(p, m.mat, big);
+    if (withTextures) {
+      bindMat(p, m.mat, big);
+      if (u.uPeg) gl.uniform1f(u.uPeg, m.mat === 'peg' ? 1 : 0);
+      if (u.uWall) gl.uniform1f(u.uWall, m.mat === 'wall' ? 1 : 0);
+      if (u.uDetail) gl.uniform1f(u.uDetail, m.mat === 'wall' && !GLR.lite ? 0.35 : 0);       // (the detail layer: not on phones or software GL: one more fetch on every wall pixel)
+    }
     if (u.uEdgeAA) gl.uniform1f(u.uEdgeAA, big ? 0 : 1);      // (FXAA leaves the big textured surfaces' insides alone)
     gl.bindVertexArray(m.mesh.vao);
     gl.drawElements(gl.TRIANGLES, m.mesh.count, gl.UNSIGNED_INT, 0);
   }
   if (u.uBoardRefl) gl.uniform1f(u.uBoardRefl, 1);
   if (u.uEdgeAA) gl.uniform1f(u.uEdgeAA, 1);
+  if (withTextures) { if (u.uPeg) gl.uniform1f(u.uPeg, 0); if (u.uWall) gl.uniform1f(u.uWall, 0); if (u.uDetail) gl.uniform1f(u.uDetail, 0); }
   for (let mi = 0; mi < PIECE_MATS.length; mi++) {
     const mat = PIECE_MATS[mi];
     let bound = false;
@@ -7443,7 +7853,7 @@ function drawAll(p, withTextures, casterOnly) {
 /* ---- One frame ---- */
 // Render on demand: a still scene is drawn once; anything moving asks for frames
 function sceneSignature(t) {
-  const anim = GLR.rollCount > 0 || fxAnimating() || !!EDIT.ghost || EDIT.pulse > 0 || !!VIEWCAM.anim;
+  const anim = GLR.rollCount > 0 || fxAnimating() || !!EDIT.ghost || EDIT.pulse > 0 || !!VIEWCAM.anim || SHMOVE.pending;
   if (anim) return t;
   return -(MODEL.version * 7919 + VIEWCAM.version * 131 + GLR.rw * 3 + GLR.rh + (EDIT.lifted ? 17 : 0) + (GLR.dirty ? t : 0)) - 1;
 }
@@ -7466,6 +7876,7 @@ function renderGL(t) {
   updateShadowRegion();
   frameDraws(t);
   frameInstances();
+  updateContact();
   // 1) shadow maps: only when a piece moved, changed, wiggles or floats
   gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true);
   gl.disable(gl.CULL_FACE); gl.disable(gl.BLEND);
@@ -7742,7 +8153,17 @@ function overlayPaths(pieces, key) {
   OVL.stale = OVL.stale || PREVIEW.cut;
   return paths;
 }
+// While a run plays and the view is zoomed far in (past 4 x the home zoom), the 2D path preview, beat rings, labels
+// and look-ahead are painted over the pieces nearer the eye than the marble plane (they have no depth) and undo the
+// solidity of what is in front of them: they fade out between 4 x and 6 x the home zoom. Building (no session) keeps
+// them at full strength.
+function pathFade() {
+  if (!SIM.session || !glOk) return 1;
+  return 1 - clamp((VIEWCAM.zoom / Math.max(1, homeZoom()) - 4) / 2, 0, 1);
+}
 function drawPaths(g, t, ppu) {
+  const fade = pathFade();
+  if (fade <= 0.01) return;
   const pieces = previewPieces(), key = previewKey();
   const paths = overlayPaths(pieces, key);
   OVL.ends.length = 0;
@@ -7759,14 +8180,14 @@ function drawPaths(g, t, ppu) {
   if (!paths.size) return;
   const clk = layoutBeatClock(), clkKey = BEAT_CLOCK.key;
   const moving = SIM.session && drawnMarbles().length > 0;
-  const playing = SIM.playing, alpha = moving ? 0.3 : 1;
+  const playing = SIM.playing, alpha = (moving ? 0.3 : 1) * fade;
   const colliders = () => layoutColliders(pieces, key);  // (built only if a path's beats need working out again)
   const md = 2 * CANON.MARBLE_R * ppu;                     // a marble's diameter on screen
   const sel = EDIT.selected;
   const tiny = ppu < 0.3;                                   // (a board this small shows only the selected dropper's marks)
   g.save();
   g.lineJoin = 'round'; g.lineCap = 'round';
-  if (playing) { drawLookAhead(g, paths, pieces); g.restore(); return; }
+  if (playing) { drawLookAhead(g, paths, pieces, fade); g.restore(); return; }
   const clean = !EDIT.drag && !EDIT.ghost ? snapBase(null).clean : null;        // (where a bar can take the note cleanly)
   let di = 0;
   for (const [id, pr] of paths) {
@@ -7833,9 +8254,9 @@ function strokePath(g, S, i0, i1) {
 // Playing: each rolling marble shows the next half second of its dropper's path (a marble follows its dropper's
 // predicted path while nothing else touches it; path time = display time - its release)
 const LOOK = { key: null, colOf: new Map() };             // each dropper's colour, per preview
-function drawLookAhead(g, paths, pieces) {
+function drawLookAhead(g, paths, pieces, fade = 1) {
   const list = drawnMarbles(), dt = 1 / 60;
-  g.globalAlpha = 0.3; g.lineWidth = 2;                     // (faint: the marbles in flight are what to watch)
+  g.globalAlpha = 0.3 * fade; g.lineWidth = 2;              // (faint: the marbles in flight are what to watch)
   if (LOOK.key !== paths) {
     LOOK.key = paths; LOOK.colOf.clear();
     let di = 0;
@@ -7965,13 +8386,14 @@ function drawEnd(g, end, id) {
 }
 // Phones, a demo playing, and any run on a tower: a soft halo round each marble in its voice's tint (melody bright,
 // accompaniment darker), so the marbles can be followed at a small scale and down a tall board. It fades out as the
-// view zooms in (gone once a marble is 64 px across): close up the glass itself is what to look at.
+// view zooms in (full below a 28 px marble, gone at 44 px): at the follow zoom the glass, swirl and glint are what to
+// look at, so the glow stays a faint ring (radius 1.6 R, peak alpha 0.4) that only helps the eye find the marble.
 function drawHalos(g, ppu) {
   if (!SIM.session || !(tallBoard() || (SIM.playing && MODEL.demoId && phoneView()))) return;
-  const md = 2 * CANON.MARBLE_R * ppu, fade = clamp((64 - md) / 32, 0, 1);
+  const md = 2 * CANON.MARBLE_R * ppu, fade = clamp((44 - md) / 16, 0, 1);
   if (fade <= 0) return;
   const b = MarbleDemos.cached(MODEL.demoId), dv = b && b.dropperVoice;
-  const r = Math.max(10, CANON.MARBLE_R * ppu * 2.2);
+  const r = Math.max(8, CANON.MARBLE_R * ppu * 1.6);
   g.save();
   g.globalAlpha = fade;
   for (const m of drawnMarbles()) {
@@ -7980,7 +8402,7 @@ function drawHalos(g, ppu) {
     VIEW.b2sTo(q[0], q[1], SP);
     const mel = !dv || !dv.get(m.dropperId);
     const gr = g.createRadialGradient(SP[0], SP[1], CANON.MARBLE_R * ppu * 0.9, SP[0], SP[1], r);
-    gr.addColorStop(0, mel ? 'rgba(255, 244, 190, 0.8)' : 'rgba(120, 165, 255, 0.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    gr.addColorStop(0, mel ? 'rgba(255, 244, 190, 0.4)' : 'rgba(120, 165, 255, 0.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = gr; g.beginPath(); g.arc(SP[0], SP[1], r, 0, Math.PI * 2); g.fill();
   }
   g.restore();
@@ -8632,14 +9054,27 @@ function setShowPath(on) { UI.showPath = on; pathBtn.setAttribute('aria-pressed'
 pathBtn.addEventListener('click', () => setShowPath(!UI.showPath));
 setShowPath(UI.showPath);
 // Cinematic (the demo strip): the view swings slowly round the run while it plays (off by default; remembered)
-const cineBtn = $('#cineBtn');
-function setCinematic(on) {
-  UI.cinematic = !!on;
+// With reduced motion on, the toggle is inert and says so (aria-disabled; the stored preference is left as it was and
+// comes back when reduced motion goes off).
+const cineBtn = $('#cineBtn'), CINE_TITLE = cineBtn.title;
+let cineWanted = store.get('marbleMusic.cinematic') === '1';
+function setCinematic(on, remember = true) {
+  if (remember) { cineWanted = !!on; store.set('marbleMusic.cinematic', cineWanted ? '1' : '0'); }
+  UI.cinematic = cineWanted && !reducedMotion;
   cineBtn.setAttribute('aria-pressed', String(UI.cinematic));
-  store.set('marbleMusic.cinematic', UI.cinematic ? '1' : '0');
+  cineBtn.setAttribute('aria-disabled', String(reducedMotion));
+  cineBtn.title = reducedMotion ? 'Off: reduced motion is on' : CINE_TITLE;
 }
-setCinematic(store.get('marbleMusic.cinematic') === '1');
-cineBtn.addEventListener('click', () => { setCinematic(!UI.cinematic); say(UI.cinematic ? 'Cinematic on: the view swings round the run while it plays.' : 'Cinematic off.'); });
+setCinematic(cineWanted, false);
+cineBtn.addEventListener('click', () => {
+  if (reducedMotion) { say('Cinematic is off: reduced motion is on.'); return; }
+  setCinematic(!UI.cinematic);
+  say(UI.cinematic ? 'Cinematic on: the view swings round the run while it plays.' : 'Cinematic off.');
+});
+if (RM_QUERY) {
+  const onRM = (e) => { reducedMotion = e.matches; setCinematic(cineWanted, false); };
+  if (RM_QUERY.addEventListener) RM_QUERY.addEventListener('change', onRM); else if (RM_QUERY.addListener) RM_QUERY.addListener(onRM);
+}
 
 /* ---- The view compass (#viewCube): a small picture of the pegboard on its wall as the camera sees it (turned by
  *  the same yaw and pitch), with the angle under it. Drag on it to orbit (2 axes), press it for the front view; arrow
@@ -8710,7 +9145,7 @@ cubeEl.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   try { cubeEl.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   stopOrbitMotion();
-  CUBE.drag = { id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, moved: false, raw: orbitRaw() };
+  CUBE.drag = { id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
 });
 cubeEl.addEventListener('pointermove', (e) => {
   const d = CUBE.drag;
@@ -8718,7 +9153,7 @@ cubeEl.addEventListener('pointermove', (e) => {
   if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 3) return;
   d.moved = true;
   const g = 2.2 * RAD;                                            // (a small dial: 2.2° per px)
-  orbitBy(-(e.clientX - d.lx) * g, (e.clientY - d.ly) * g, d.raw);
+  orbitBy(-(e.clientX - d.lx) * g, (e.clientY - d.ly) * g);
   d.lx = e.clientX; d.ly = e.clientY;
 });
 const cubeUp = (e) => {
@@ -8978,8 +9413,8 @@ function demoNotReady(id, andPlay) {
   clearInterval(UI.solveTick);
   if (st.state === 'solving') {
     UI.wantDemo = { id, andPlay };
-    const text = () => { const s = Math.round((MarbleDemos.status(id).elapsed || 0) / 1000); return title + ' plays differently on this computer, so it is being solved again here… ' + s + ' s' + (s >= 8 ? ' (up to about half a minute)' : ''); };
-    toast(text(), 'Cancel', () => { UI.wantDemo = null; clearInterval(UI.solveTick); }, 1e9);
+    const text = () => { const s = Math.round((MarbleDemos.status(id).elapsed || 0) / 1000); return title + ' plays differently on this computer, so it is being solved again here… ' + s + ' s' + (s >= 30 ? ' (still solving)' : s >= 8 ? ' (up to about half a minute)' : ''); };
+    toast(text(), 'Cancel', () => { UI.wantDemo = null; clearInterval(UI.solveTick); MarbleDemos.cancel(id); }, 1e9);
     UI.solveTick = setInterval(() => {
       if (MarbleDemos.status(id).state !== 'solving' || !UI.wantDemo || UI.wantDemo.id !== id) { clearInterval(UI.solveTick); return; }
       const t = $('#toast span'); if (t) t.textContent = text();
@@ -9511,7 +9946,9 @@ document.addEventListener('keydown', (e) => {
  *  - Board: press a piece to select it and drag to move it; drag the yellow knob to turn it (15° steps,
  *    Shift 5°, Alt free); drag the white handles to resize; drag it back onto the tray to remove it.
  *    Drag empty board (one finger) to ORBIT the view round the point in the middle of the screen (a light spin
- *    after a quick drag); Shift-, right- or middle-drag (two fingers) to pan (let go while moving and it glides on);
+ *    after a quick drag; the selection stays through it, only a plain click on empty board deselects). While a demo
+ *    plays a drag that starts on a piece orbits too, and the piece is picked up after a short hold (HOLD_MS);
+ *    Shift-, right- or middle-drag (two fingers) to pan (the board stays under the pointer; let go while moving and it glides on);
  *    wheel or pinch to zoom (on a tower the wheel scrolls and Ctrl+wheel zooms; a two-finger twist turns the view);
  *    double-click a piece to zoom in on it; the wheel over the selected piece turns it. In the 2D view (front-on)
  *    a drag pans instead.
@@ -9798,24 +10235,30 @@ function trayKey(e) {
 /* ---- The board ---- */
 const POINTERS = new Map();                           // active touch/pen pointers (pinch)
 const TWIST_DEAD = 8 * RAD;                           // a two-finger twist turns the view once it has passed this
+const HOLD_MS = 250;                                  // a piece of a playing demo is picked up after this long held still (a quicker drag turns the view)
+const SLIDE_PX = 16;                                  // two fingers pan (and pause following) after this much NET midpoint travel
 function boardDown(e) {
   const stage = stageEl();
   piano.init();
   stage.focus({ preventScroll: true });
-  POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  const now = performance.now();
+  for (const [id, q] of POINTERS) if (now - q.t > 3000) POINTERS.delete(id);   // (a finger whose pointerup never came: see clearPointers)
+  POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
   try { stage.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   const touch = e.pointerType !== 'mouse';
   if (POINTERS.size === 2) {                          // second finger: pinch (zoom), pan and twist (orbit) the view instead
     stopFling(); stopOrbitMotion();
     if (EDIT.drag && EDIT.drag.kind !== 'pinch') { if (EDIT.drag.kind === 'move' || EDIT.drag.kind === 'handle') { EDIT.lifted = null; endChange(); } }
-    const [a, b] = [...POINTERS.values()];
-    EDIT.drag = { kind: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, a0: Math.atan2(b.y - a.y, b.x - a.x), twist: 0, travel: 0, raw: orbitRaw() };
+    const ids = [...POINTERS.keys()], a = POINTERS.get(ids[0]), b = POINTERS.get(ids[1]);
+    // (the fingers' places as of the last step taken, and which of them has moved since: see pinchStep)
+    EDIT.drag = { kind: 'pinch', ids, pa: { x: a.x, y: a.y }, pb: { x: b.x, y: b.y }, fresh: [false, false], last: -1, run: 0, c0: [(a.x + b.x) / 2, (a.y + b.y) / 2],
+      slid: false, d0: Math.hypot(a.x - b.x, a.y - b.y), a0: Math.atan2(b.y - a.y, b.x - a.x), twist: 0 };
     return;
   }
   if (POINTERS.size > 2) return;
   if (e.pointerType === 'mouse' && ((e.button !== undefined && e.button > 0) || e.shiftKey)) {   // right, middle or Shift-drag: pan
     stopFling(); stopOrbitMotion();
-    EDIT.drag = { kind: 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY };
+    EDIT.drag = { kind: 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, moved: false };
     return;
   }
   const bp = VIEW.s2b(e.clientX, e.clientY);
@@ -9831,17 +10274,61 @@ function boardDown(e) {
   const tol = (touch ? 16 : 7) / Math.max(0.05, VIEW.ppu());
   const p = pieceAt(bp[0], bp[1], tol);
   if (p) {
+    if (SIM.playing && MODEL.demoId && glOk) {         // a demo playing (not yet your run): a plain drag turns the view, even over a piece;
+      stopFling(); stopOrbitMotion();                  // moving the piece takes a short hold (HOLD_MS), a tap still selects it
+      const t0 = e.timeStamp || now, d = { kind: 'orbit', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, touch, moved: false, pendingMove: p.id, t0, bx: bp[0], by: bp[1] };
+      EDIT.drag = d;
+      setTimeout(() => { if (EDIT.drag === d && d.pendingMove && !d.moved) holdToMove(d); }, HOLD_MS);
+      return;
+    }
     select(p.id);
     EDIT.drag = { kind: 'move', id: e.pointerId, pid: p.id, x0: e.clientX, y0: e.clientY, bx: bp[0], by: bp[1], px: p.x, py: p.y, moved: false };
     return;
   }
-  select(null);
   stopFling(); stopOrbitMotion();
-  // empty board: orbit the 3D view (the 2D view, front-on, pans)
-  EDIT.drag = { kind: glOk ? 'orbit' : 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, touch, raw: orbitRaw(), moved: false };
+  // empty board: orbit the 3D view (the 2D view, front-on, pans). The selection stays through a drag (turning the
+  // view to look at the selected piece from another side is the point); only a plain click on empty board
+  // deselects it (boardUp).
+  EDIT.drag = { kind: glOk ? 'orbit' : 'pan', id: e.pointerId, lx: e.clientX, ly: e.clientY, x0: e.clientX, y0: e.clientY, touch, moved: false, fromEmpty: true };
+}
+// A drag that began on a piece of a playing demo has been held still for HOLD_MS: it is a normal move drag now
+function holdToMove(d) {
+  const p = pieceById(d.pendingMove);
+  d.pendingMove = null;
+  if (!p || EDIT.drag !== d) return;
+  select(p.id);
+  EDIT.drag = { kind: 'move', id: d.id, pid: p.id, x0: d.x0, y0: d.y0, bx: d.bx, by: d.by, px: p.x, py: p.y, moved: false };
+}
+// A finger (or pen) whose pointerup never came (capture lost, the window blurred or hidden, the canvas replaced under
+// a drag) would stay in POINTERS, and every next finger would be taken for the second of a pinch: let them all go
+function clearPointers() {
+  POINTERS.clear();
+  const d = EDIT.drag;
+  if (d && (d.kind === 'pinch' || d.kind === 'orbit' || d.kind === 'pan')) { EDIT.drag = null; try { stageEl().style.cursor = ''; } catch (e) { /* no stage yet */ } }
+}
+// One step of a two-finger gesture, from the fingers' places now (a, b) and as of the last step (d.pa, d.pb): pinching
+// zooms (about the marble while following, else about the midpoint), twisting turns the yaw (past a dead zone), and
+// moving the midpoint slides the board. Whether this is a slide is decided from the NET travel of the midpoint since
+// the gesture began (SLIDE_PX), not from the sum of its steps, so a steady pinch never lets go of the followed marble;
+// only a slide pauses the follow camera (the twist and the zoom never do).
+function pinchStep(d, a, b) {
+  const dist = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, px = (d.pa.x + d.pb.x) / 2, py = (d.pa.y + d.pb.y) / 2;
+  if (!d.slid && Math.hypot(cx - d.c0[0], cy - d.c0[1]) > SLIDE_PX) d.slid = true;
+  const following = TFOLLOW.active && !TFOLLOW.paused, grab = VIEW.s2b(px, py);   // (the board point that was under the midpoint)
+  if (d.d0 > 10 && dist > 10) zoomAt(cx, cy, dist / d.d0);
+  if (glOk) {
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    let da = ang - d.a0; if (da > Math.PI) da -= 2 * Math.PI; else if (da < -Math.PI) da += 2 * Math.PI;
+    d.a0 = ang;
+    const was = d.twist; d.twist += da;
+    const use = Math.max(0, Math.abs(d.twist) - TWIST_DEAD) * Math.sign(d.twist) - Math.max(0, Math.abs(was) - TWIST_DEAD) * Math.sign(was);
+    if (use) orbitBy(use, 0);
+  }
+  if (d.slid || !following) panGrabPoint(grab, cx, cy, d.slid);     // (a followed view stays put until the slide is certain)
+  d.pa.x = a.x; d.pa.y = a.y; d.pb.x = b.x; d.pb.y = b.y; d.d0 = dist;
 }
 function boardMove(e) {
-  if (POINTERS.has(e.pointerId)) POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (POINTERS.has(e.pointerId)) POINTERS.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
   const d = EDIT.drag;
   if (!d) {                                           // hover (mouse)
     if (e.pointerType === 'mouse') {
@@ -9854,38 +10341,33 @@ function boardMove(e) {
     return;
   }
   if (d.kind === 'pinch') {
-    if (POINTERS.size < 2) return;
-    const [a, b] = [...POINTERS.values()];
-    const dist = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-    // two fingers moving together pan (after 10 px, which pauses the follow camera); pinching zooms; twisting turns
-    d.travel += Math.hypot(cx - d.cx, cy - d.cy);
-    panBy(cx - d.cx, cy - d.cy, d.travel > 10);
-    if (d.d0 > 10) zoomAt(cx, cy, dist / d.d0);
-    if (glOk) {
-      const ang = Math.atan2(b.y - a.y, b.x - a.x);
-      let da = ang - d.a0; if (da > Math.PI) da -= 2 * Math.PI; else if (da < -Math.PI) da += 2 * Math.PI;
-      d.a0 = ang;
-      const was = d.twist; d.twist += da;
-      const use = Math.max(0, Math.abs(d.twist) - TWIST_DEAD) * Math.sign(d.twist) - Math.max(0, Math.abs(was) - TWIST_DEAD) * Math.sign(was);
-      if (use) orbitBy(use, 0, d.raw);
-    }
-    d.d0 = dist; d.cx = cx; d.cy = cy;
+    // pointermove arrives one finger at a time, so the midpoint of the fingers' CURRENT places jitters by half a
+    // finger step per event even in a perfectly symmetric pinch. A step is taken only when both fingers have moved
+    // since the last one (or the same finger twice running: the other is resting), from the places both had then.
+    const i = d.ids.indexOf(e.pointerId);
+    if (i < 0 || POINTERS.size < 2 || !POINTERS.has(d.ids[0]) || !POINTERS.has(d.ids[1])) return;
+    d.run = d.last === e.pointerId ? d.run + 1 : 1; d.last = e.pointerId; d.fresh[i] = true;
+    if (!(d.fresh[0] && d.fresh[1]) && d.run < 2) return;
+    d.fresh[0] = d.fresh[1] = false;
+    pinchStep(d, POINTERS.get(d.ids[0]), POINTERS.get(d.ids[1]));
     return;
   }
   if (e.pointerId !== d.id) return;
   if (d.kind === 'pan') {                            // (the fling's speed from the events' own times: a busy frame does not slow it)
     const now = e.timeStamp || performance.now(), dtm = Math.max(1, now - (d.lt || now - 16)), k = Math.min(1, dtm / 50);
     d.vx = (d.vx || 0) * (1 - k) + ((e.clientX - d.lx) / dtm * 1000) * k; d.vy = (d.vy || 0) * (1 - k) + ((e.clientY - d.ly) / dtm * 1000) * k; d.lt = now;
-    panBy(e.clientX - d.lx, e.clientY - d.ly); d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing';
+    if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) >= 4) d.moved = true;
+    panGrab(d.lx, d.ly, e.clientX, e.clientY); d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing';
     return;
   }
   if (d.kind === 'orbit') {                          // drag right: the view swings left round the target (the board turns with the pointer)
+    if (d.pendingMove && (e.timeStamp || performance.now()) - d.t0 >= HOLD_MS && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) { holdToMove(d); return; }   // (held still: the timer may have been late)
     if (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) return;
-    if (!d.moved) { d.moved = true; orbitHint(d.touch); }
-    const g = orbitGain(), dy = -(e.clientX - d.lx) * g, dp = (e.clientY - d.ly) * g;
+    if (!d.moved) { d.moved = true; d.pendingMove = null; orbitHint(d.touch); }
+    const g = orbitGain(), dy = -(e.clientX - d.lx) * g, dp = (e.clientY - d.ly) * g * PITCH_GAIN;
     const now = e.timeStamp || performance.now(), dtm = Math.max(1, now - (d.lt || now - 16)), k = Math.min(1, dtm / 50);
     d.vy = (d.vy || 0) * (1 - k) + (dy / dtm * 1000) * k; d.vp = (d.vp || 0) * (1 - k) + (dp / dtm * 1000) * k; d.lt = now;
-    orbitBy(dy, dp, d.raw);
+    orbitBy(dy, dp);
     d.lx = e.clientX; d.ly = e.clientY; stageEl().style.cursor = 'grabbing';
     return;
   }
@@ -9915,9 +10397,11 @@ function boardUp(e) {
   if (e.pointerId !== d.id) return;
   EDIT.drag = null;
   stageEl().style.cursor = '';
+  if ((d.kind === 'pan' || d.kind === 'orbit') && d.fromEmpty && !d.moved && e.type === 'pointerup') select(null);   // a plain click on empty board deselects
+  if (d.kind === 'orbit' && d.pendingMove && !d.moved && e.type === 'pointerup') select(d.pendingMove);              // a tap on a piece of a playing demo selects it
   if (d.kind === 'pan' && d.lt && (e.timeStamp || performance.now()) - d.lt < 80 && Math.hypot(d.vx, d.vy) > 250 && !reducedMotion) { FLING.vx = d.vx; FLING.vy = d.vy; return; }
-  if (d.kind === 'orbit') {                          // let go while turning: it spins on a little and settles
-    if (d.moved && d.lt && (e.timeStamp || performance.now()) - d.lt < 80 && Math.hypot(d.vy, d.vp) > 0.6 && !reducedMotion) { ORBIT.vyaw = clamp(d.vy, -4, 4); ORBIT.vpitch = clamp(d.vp, -4, 4); ORBIT.raw = d.raw; }
+  if (d.kind === 'orbit') {                          // let go while turning: it spins on a little (at most ~20°) and settles
+    if (d.moved && d.lt && (e.timeStamp || performance.now()) - d.lt < 80 && Math.hypot(d.vy, d.vp) > 0.6 && !reducedMotion) { ORBIT.vyaw = clamp(d.vy, -SPIN_MAX, SPIN_MAX); ORBIT.vpitch = clamp(d.vp, -SPIN_MAX, SPIN_MAX); }
     return;
   }
   if (d.kind === 'move') {
@@ -10055,37 +10539,43 @@ function camDist() { return glOk && GLR.cam.D ? GLR.cam.D : view.h / (2 * Math.m
 function fovYNow() { return glOk && GLR.cam.fovY ? GLR.cam.fovY : 2 * Math.atan(Math.tan(CAMERA.fovDiag / 2) * view.h / Math.max(1, Math.hypot(view.w, view.h))); }
 const zoomForDist = (dist) => VIEWCAM.zoom * camDist() / Math.max(1, dist);
 
-/* ---- Orbit: yaw / pitch about the target. The limits are eased into (soft): the last 12% of each range is
- *  compressed, so a drag slows down as it nears a limit and never snaps. A drag accumulates a RAW (unlimited) angle
- *  that maps through softLimit; anything else (keys, the widget, the API) goes through orbitTo / orbitBy. A quick
- *  drag let go spins on and settles (ORBIT.vyaw / vpitch). The cinematic swing (UI.cinematic, the demo strip) adds a
- *  slow sine on top while a run plays (CAMERA.autoYaw / autoPitch), fading in and out. */
-const ORBIT = { vyaw: 0, vpitch: 0, raw: null, glide: null, autoT: 0, autoK: 0 };
+/* ---- Orbit: yaw / pitch about the target. The limits are eased into (soft): within the last 12% of a range every step
+ *  towards the limit is scaled by the distance still to go (an exponential approach: a drag slows down as it nears a
+ *  limit, never snaps and never passes it), while a step away from it is taken in full at once, so a view that sits at
+ *  a limit (the floor pushed it there, or a drag held it there) answers the first pixel of a drag the other way. A
+ *  quick drag let go spins on and settles (ORBIT.vyaw / vpitch). The cinematic swing (UI.cinematic, the demo strip)
+ *  adds a slow sine on top while a demo plays (CAMERA.autoYaw / autoPitch), fading in and out. */
+const ORBIT = { vyaw: 0, vpitch: 0, glide: null, autoT: 0, autoK: 0 };
 const SOFT = 0.12;
-function softLimit(raw, lo, hi) {
+const PITCH_GAIN = 0.55;                              // tilting is slower than turning (a pitch range is only 90°, a yaw range 150°)
+const SPIN_MAX = 1.5;                                 // rad/s: the spin after a flick travels at most SPIN_MAX / SPIN_DECAY = ~19°
+const SPIN_DECAY = 4.5;                               // 1/s
+// Add d to the angle v (limits lo..hi, the last SOFT of the range eased into)
+function softAdd(v, d, lo, hi) {
   const w = Math.max(1e-6, (hi - lo) * SOFT);
-  if (raw > hi - w) return hi - w + w * (1 - Math.exp(-(raw - (hi - w)) / w));
-  if (raw < lo + w) return lo + w - w * (1 - Math.exp(-((lo + w) - raw) / w));
-  return raw;
-}
-function unsoft(v, lo, hi) {
-  const w = Math.max(1e-6, (hi - lo) * SOFT);
-  if (v > hi - w) return hi - w - w * Math.log(Math.max(1e-6, 1 - (v - (hi - w)) / w));
-  if (v < lo + w) return lo + w + w * Math.log(Math.max(1e-6, 1 - ((lo + w) - v) / w));
-  return v;
+  v = clamp(v, lo, hi);
+  if (d > 0) {
+    const lin = Math.min(d, Math.max(0, hi - w - v)); v += lin; d -= lin;
+    if (d > 0) v = hi - (hi - v) * Math.exp(-d / w);
+  } else if (d < 0) {
+    const lin = Math.min(-d, Math.max(0, v - lo - w)); v -= lin; d += lin;
+    if (d < 0) v = lo + (v - lo) * Math.exp(d / w);
+  }
+  return clamp(v, lo, hi);
 }
 const yawLimits = () => [-CAMERA.yawMax, CAMERA.yawMax];
 function pitchLimits() { const c = glOk && GLR.cam.target; return [c ? pitchFloor(c[1], GLR.cam.D) : CAMERA.pitchMin, CAMERA.pitchMax]; }
-function orbitRaw() { const y = yawLimits(), p = pitchLimits(); return [unsoft(CAMERA.yaw, y[0], y[1]), unsoft(CAMERA.pitch, p[0], p[1])]; }
-function orbitGain() { return 0.9 * Math.PI / Math.max(320, view.w); }     // radians per px: a drag across the screen is ~160°
-function stopOrbitMotion() { ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null; ORBIT.glide = null; }
-// Turn by (dyaw, dpitch) radians, accumulating in raw (a drag's own, or the shared one)
-function orbitBy(dyaw, dpitch, raw = ORBIT.raw || (ORBIT.raw = orbitRaw())) {
+function orbitRaw() { return [CAMERA.yaw, CAMERA.pitch]; }       // (the angles a turn starts from)
+// radians per px: a fixed angular rate however small the screen (0.16°/px on a phone or tablet, 0.127°/px on a 1280 px
+// desktop, where a drag across the screen turns ~160°); tilting uses PITCH_GAIN of it
+function orbitGain() { return 0.9 * Math.PI / Math.max(1024, view.w); }
+function stopOrbitMotion() { ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.glide = null; }
+// Turn by (dyaw, dpitch) radians
+function orbitBy(dyaw, dpitch) {
   if (!glOk) return;
   ORBIT.glide = null;
-  raw[0] += dyaw; raw[1] += dpitch;
   const y = yawLimits(), p = pitchLimits();
-  CAMERA.yaw = softLimit(raw[0], y[0], y[1]); CAMERA.pitch = softLimit(raw[1], p[0], p[1]);
+  CAMERA.yaw = softAdd(CAMERA.yaw, dyaw, y[0], y[1]); CAMERA.pitch = softAdd(CAMERA.pitch, dpitch, p[0], p[1]);
   applyCam(); refreshViewCube();
 }
 // Glide to an orientation (radians) over dur s (at once with reduced motion)
@@ -10093,11 +10583,11 @@ function orbitTo(yaw, pitch, dur = 0.5) {
   if (!glOk) return;
   const y = yawLimits(), p = pitchLimits();
   yaw = clamp(yaw, y[0], y[1]); pitch = clamp(pitch, p[0], p[1]);
-  ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null;
+  ORBIT.vyaw = ORBIT.vpitch = 0;
   if (reducedMotion || dur <= 0) { ORBIT.glide = null; CAMERA.yaw = yaw; CAMERA.pitch = pitch; applyCam(); refreshViewCube(); return; }
   ORBIT.glide = { y0: CAMERA.yaw, p0: CAMERA.pitch, y1: yaw, p1: pitch, t: 0, dur };
 }
-function orbitStep(dyaw, dpitch) { const r = orbitRaw(), y = yawLimits(), p = pitchLimits(); orbitTo(softLimit(r[0] + dyaw, y[0], y[1]), softLimit(r[1] + dpitch, p[0], p[1]), 0.25); }
+function orbitStep(dyaw, dpitch) { const y = yawLimits(), p = pitchLimits(); orbitTo(softAdd(CAMERA.yaw, dyaw, y[0], y[1]), softAdd(CAMERA.pitch, dpitch, p[0], p[1]), 0.25); }
 function frontView(dur = 0.5) { orbitTo(CAMERA.yaw0, CAMERA.pitch0, dur); }
 const isFrontView = () => Math.abs(CAMERA.yaw - CAMERA.yaw0) < 0.5 * RAD && Math.abs(CAMERA.pitch - CAMERA.pitch0) < 0.5 * RAD;
 // Run fn with the camera at the front view (for measuring a fit), then put the orbit back
@@ -10105,6 +10595,13 @@ function withFrontCam(fn) {
   const y = CAMERA.yaw, p = CAMERA.pitch, ay = CAMERA.autoYaw, ap = CAMERA.autoPitch;
   CAMERA.yaw = CAMERA.yaw0; CAMERA.pitch = CAMERA.pitch0; CAMERA.autoYaw = CAMERA.autoPitch = 0;
   try { fn(); } finally { CAMERA.yaw = y; CAMERA.pitch = p; CAMERA.autoYaw = ay; CAMERA.autoPitch = ap; applyCam(); }
+}
+// Is the camera being moved by hand or on its own (orbit drag, pinch, pan, a glide, the spin after a flick, the
+// Cinematic swing, a fling)? The shadow cascades take a wider margin while it is (updateShadowRegion).
+function cameraMoving() {
+  const d = EDIT.drag;
+  return !!((d && ((d.kind === 'orbit' && d.moved) || d.kind === 'pinch' || (d.kind === 'pan' && d.moved))) || ORBIT.glide || ORBIT.vyaw || ORBIT.vpitch || ORBIT.autoK > 0
+    || VIEWCAM.glide || VIEWCAM.anim || FLING.vx || FLING.vy);
 }
 // Each frame: the glide, the spin after a drag, the cinematic swing
 function stepOrbit(dt) {
@@ -10118,16 +10615,16 @@ function stepOrbit(dt) {
     if (G.t >= 1) ORBIT.glide = null;
     changed = true;
   } else if (ORBIT.vyaw || ORBIT.vpitch) {
-    if (!ORBIT.raw) ORBIT.raw = orbitRaw();
-    ORBIT.raw[0] += ORBIT.vyaw * dt; ORBIT.raw[1] += ORBIT.vpitch * dt;
+    const k = Math.exp(-dt * SPIN_DECAY), run = (1 - k) / SPIN_DECAY;   // (the exact distance covered in dt: the same spin at any frame rate)
     const y = yawLimits(), p = pitchLimits();
-    CAMERA.yaw = softLimit(ORBIT.raw[0], y[0], y[1]); CAMERA.pitch = softLimit(ORBIT.raw[1], p[0], p[1]);
-    const k = Math.exp(-dt * 4.5);
+    CAMERA.yaw = softAdd(CAMERA.yaw, ORBIT.vyaw * run, y[0], y[1]); CAMERA.pitch = softAdd(CAMERA.pitch, ORBIT.vpitch * run, p[0], p[1]);
     ORBIT.vyaw *= k; ORBIT.vpitch *= k;
-    if (Math.hypot(ORBIT.vyaw, ORBIT.vpitch) < 0.02) { ORBIT.vyaw = ORBIT.vpitch = 0; ORBIT.raw = null; }
+    if (Math.hypot(ORBIT.vyaw, ORBIT.vpitch) < 0.02) ORBIT.vyaw = ORBIT.vpitch = 0;
     changed = true;
   }
-  const swing = UI.cinematic && SIM.session && !reducedMotion && !(EDIT.drag && (EDIT.drag.kind === 'orbit' || EDIT.drag.kind === 'pinch'));
+  // (Cinematic is a demo-strip preference: a remembered '1' does not swing the builder's own run, whose strip, and so
+  //  whose toggle, is hidden; a Remix keeps its demo's strip)
+  const swing = UI.cinematic && SIM.session && !!stripDemo() && !reducedMotion && !(EDIT.drag && (EDIT.drag.kind === 'orbit' || EDIT.drag.kind === 'pinch'));
   if (swing) {
     ORBIT.autoT += dt; ORBIT.autoK = Math.min(1, ORBIT.autoK + dt / 2.5);
     CAMERA.autoYaw = ORBIT.autoK * 0.34 * Math.sin(ORBIT.autoT * 2 * Math.PI / 30);
@@ -10154,7 +10651,10 @@ function zoomToPiece(p) {
   const r = uiSafeRect(), size = Math.max(60, pieceReach(p) * 2 + 20);
   const want = Math.min(r.r - r.l, r.b - r.t) * 0.7 / size;
   const z = clamp(VIEWCAM.zoom * want / Math.max(1e-6, VIEW.ppu()), ZOOM_MIN, zoomMax());
-  pauseFollow(); setViewMode('free'); TFOLLOW.userZoom = true;
+  setViewMode('free'); TFOLLOW.userZoom = true;
+  const aim = TFOLLOW.active && !TFOLLOW.paused && followAim();
+  if (aim) { glideTo(aim.x, aim.y, z, 0.5); return; }            // following: only the zoom glides (it lands on the marble's moving aim)
+  pauseFollow();
   glideTo(p.x, p.y, z, 0.5);
 }
 // The camera as the API reports it: angles in degrees, the distance, the target (board units), following
@@ -10201,6 +10701,28 @@ function panBy(dx, dy, user = true) {                 // (screen px: the board m
   VIEWCAM.panX += mx; VIEWCAM.panY += my;
   applyCam(); clampPan();
   if (user) { setViewMode('free'); pauseFollow(); }
+}
+// Pan so that the board point under screen point (x0, y0) comes under (x1, y1): the board is held by the pointer from
+// any angle (panBy measures the displacement at the middle of the view, so at an oblique angle a grabbed point
+// would slide off the pointer). A grab that misses the board (too far from the target: a steep angle near the
+// horizon) falls back to panBy.
+function panGrab(x0, y0, x1, y1, user = true) {
+  if (!glOk) { panBy(x1 - x0, y1 - y0, user); return; }
+  const g = VIEW.s2b(x0, y0);
+  if (!panGrabPoint(g, x1, y1, user)) panBy(x1 - x0, y1 - y0, user);
+}
+// Move the view so that board point g is under screen point (px, py); false (nothing moved) when g is not near the view
+function panGrabPoint(g, px, py, user = true) {
+  const c = rectCentre(uiSafeRect()), t = VIEW.s2b(c[0], c[1]), [sw, sh] = viewSpan(), lim = 3 * Math.max(sw, sh);
+  if (!(Math.abs(g[0] - t[0]) < lim && Math.abs(g[1] - t[1]) < lim)) return false;
+  for (let it = 0; it < 2; it++) {                    // (a pan moves the point under any pixel by exactly the pan: the second pass is for the pitch floor)
+    const now = VIEW.s2b(px, py);
+    VIEWCAM.panX += clamp(g[0] - now[0], -5000, 5000); VIEWCAM.panY += clamp(g[1] - now[1], -5000, 5000);
+    applyCam();
+  }
+  clampPan();
+  if (user) { setViewMode('free'); pauseFollow(); }
+  return true;
 }
 // Zoom (a dolly) keeping the board point under (px, py) where it is. Zooming by hand does not pause the follow
 // camera (it keeps following at the new distance), but it stops it from zooming back in on its own (userZoom).
@@ -10314,21 +10836,31 @@ function setViewMode(m) {
   b.title = toRun ? 'Zoom to the run (F)' : whole;
 }
 function resetViewCam() { VIEWCAM.zoom = 1; VIEWCAM.panX = 0; VIEWCAM.panY = 0; VIEWCAM.anim = null; VIEWCAM.glide = null; SCROLLQ.x = SCROLLQ.y = 0; stopFling(); FOLLOW.saved = null; TFOLLOW.userZoom = false; }
-// The whole board (zoom 1), from the front
-function fitView() { resetViewCam(); frontView(); relayout(); VIEWMODE.mode = ''; setViewMode('board'); }
-// The view a board opens with: a Wide board whole; a tower from its top at the home zoom; from the front
-function homeView() {
-  if (!tallBoard() || !RENDER) { fitView(); return; }
-  resetViewCam(); frontView(); relayout();
+// The whole board (zoom 1), from the front. While a marble is followed this lets go of it first (the whole tower is
+// what was asked for, and the follow camera would zoom straight back in); the Follow button, which resumes at the
+// home zoom, is the way back.
+function fitView(dur = 0.5) {
+  pauseFollow();
+  resetViewCam(); frontView(dur); relayout(); VIEWMODE.mode = ''; setViewMode('board');
+}
+// The view a board opens with: a Wide board whole; a tower from its top at the home zoom; from the front (dur: the
+// turn to the front, 0 = at once)
+function homeView(dur = 0.5) {
+  if (!tallBoard() || !RENDER) { fitView(dur); return; }
+  resetViewCam(); frontView(dur); relayout();
   VIEWCAM.zoom = homeZoom(); applyCam();
   const [, sh] = viewSpan();
   setViewCentre((FIT_BOX.x0 + FIT_BOX.x1) / 2, FIT_BOX.y0 + sh / 2 - 12);
   VIEWMODE.mode = ''; setViewMode('run');
 }
-// Reset view (the widget, the API): the front view of the board as it opened; a run being followed stays followed
-function resetView() { homeView(); refreshViewCube(); }
+// Reset view (the widget, the API): the front view of the board as it opened; a run being followed stays followed.
+// The widget turns to it over 0.5 s; the API (dur 0) lands at once, so a script reads the new camera straight away.
+function resetView(dur = 0.5) { homeView(dur); refreshViewCube(); }
 // Fit (F): the whole board, or (from the whole board) the run again
-function toggleFit() { if (VIEWMODE.mode === 'board' && MODEL.pieces.length && (!stripDemo() || tallBoard())) frameRun(); else fitView(); }
+function toggleFit() {
+  pauseFollow();
+  if (VIEWMODE.mode === 'board' && MODEL.pieces.length && (!stripDemo() || tallBoard())) frameRun(); else fitView();
+}
 // The board area the run takes: every piece's metal, dropper tubes and pails, plus a margin
 function runBox(pieces = MODEL.pieces) {
   const b = piecesBox(pieces);
@@ -10391,8 +10923,8 @@ function resumeFollow() {
   TFOLLOW.paused = false; TFOLLOW.vx = TFOLLOW.vy = 0; TFOLLOW.leadId = null; TFOLLOW.userZoom = false;
   SCROLLQ.x = SCROLLQ.y = 0; stopFling();
   refreshFollowBtn();
-  const aim = followAim();
-  if (aim) glideTo(aim.x, aim.y, Math.max(VIEWCAM.zoom, homeZoom() * 0.999), 0.6);
+  const aim = followAim(), hz = homeZoom() * 0.999;
+  if (aim) { glideTo(aim.x, aim.y, Math.max(VIEWCAM.zoom, hz), 0.6); if (VIEWCAM.zoom < hz) setViewMode('run'); }   // (back at the home zoom: the Fit button says Fit again)
 }
 onSimChange((k) => { if (k === 'play') { TFOLLOW.paused = false; TFOLLOW.leadId = null; TFOLLOW.userZoom = false; } refreshFollowBtn(); });
 // The lead marble { id, x, y, aheadY } (display positions), or null
@@ -10436,8 +10968,37 @@ function followAim() {
   let cy = my + 0.15 * sh;                          // the marble a third of the way down the view,
   cy = Math.max(cy, ay - 0.35 * sh);                // the next 1.2 s of its way in view below it (to 85 %),
   cy = Math.min(cy, my + 0.3 * sh);                 // but never higher than a fifth of the way down
-  const B = FIT_BOX, fits = B.x1 - B.x0 <= sw * 1.02;
-  return { x: fits ? (B.x0 + B.x1) / 2 : mx, y: cy };
+  const B = FIT_BOX, fits = B.x1 - B.x0 <= sw * 1.02, ax = fits ? (B.x0 + B.x1) / 2 : mx;
+  return { x: ax, y: aimInScreen(ax, cy, mx, my, ay) };
+}
+// The aim above is worked out front-on. From a combined yaw and pitch at the limits the board is foreshortened and
+// the far end of the marble plane rises up the screen, so the same aim leaves the marble 77 % of the way down the
+// free area and the next pieces off the bottom. Correct it in screen space: pretend the camera moved to the aim
+// (a pure translation in the marble plane, so a board point P then lands where P - t lands now), project the marble
+// (mx, my) and the look-ahead point (mx, ahead), and if the marble is outside 25-45 % of the free area's height or
+// the look-ahead below 85 % (or the marble above 20 %) slide the aim along the board by what moves that point
+// where it should be. The correction grows from nothing at the edge of those bands, so it is smooth, and a front-on
+// view needs none. (The spring in followCam smooths what comes out.)
+function aimInScreen(ax, ay0, mx, my, ahead) {
+  if (!glOk || !GLR.cam.inv) return ay0;
+  const r = uiSafeRect(), h = Math.max(40, r.b - r.t), c = viewCentre(), tx = ax - c[0], span = viewSpan(r)[1];
+  let ty = ay0 - c[1];
+  const fy = (px, py) => { const q = project(px - tx, py - ty, ZM); return q[1] <= OFFSCREEN / 2 ? null : (q[1] - r.t) / h; };
+  const shiftTo = (px, py, want) => {                 // slide the pretended camera so that board point (px, py) lands `want` of the way down
+    for (let it = 0; it < 2; it++) {
+      const q = project(px - tx, py - ty, ZM), sx = q[0], sy = q[1];
+      if (sy <= OFFSCREEN / 2) return;
+      const qm = unproject(sx, sy), qd = unproject(sx, r.t + want * h);
+      ty += clamp(qm[1] - qd[1], -2 * span, 2 * span);
+    }
+  };
+  let m = fy(mx, my);
+  if (m != null && (m < 0.25 || m > 0.45)) shiftTo(mx, my, clamp(m, 0.25, 0.45));
+  const a = fy(mx, ahead);
+  if (a != null && a > 0.85) shiftTo(mx, ahead, 0.85);
+  m = fy(mx, my);
+  if (m != null && m < 0.2) shiftTo(mx, my, 0.2);
+  return c[1] + ty;
 }
 // Each frame while a session runs on a tower: the view moves along with the aim's (smoothed) speed and a critically
 // damped spring (an exact step: calm at any frame rate) takes up the rest, so a steady fall is followed without lag
@@ -10459,7 +11020,7 @@ function followCam(dt) {
   const G = VIEWCAM.glide;
   if (G) { G.x = aim.x; G.y = aim.y; return; }             // (a glide in progress lands on the moving aim)
   const hz = homeZoom();
-  if (VIEWCAM.zoom < hz * 0.85 && !TFOLLOW.userZoom) { glideTo(aim.x, aim.y, hz, 0.9); TFOLLOW.vx = TFOLLOW.vy = 0; return; }   // (a zoom set by hand is kept)
+  if (VIEWCAM.zoom < hz * 0.85 && !TFOLLOW.userZoom) { glideTo(aim.x, aim.y, hz, 0.9); setViewMode('run'); TFOLLOW.vx = TFOLLOW.vy = 0; return; }   // (a zoom set by hand is kept)
   const c = viewCentre(), [sw, sh] = viewSpan();
   const ox = c[0] + TFOLLOW.ax * dt - aim.x, oy = c[1] + TFOLLOW.ay * dt - aim.y;
   if (Math.abs(oy) > 1.1 * sh || Math.abs(ox) > 1.1 * sw) { glideTo(aim.x, aim.y, VIEWCAM.zoom, 0.8); TFOLLOW.vx = TFOLLOW.vy = 0; return; }
@@ -10588,11 +11149,14 @@ function attachInput() {
   stage.addEventListener('pointermove', boardMove);
   stage.addEventListener('pointerup', boardUp);
   stage.addEventListener('pointercancel', boardUp);
+  stage.addEventListener('lostpointercapture', (e) => { if (POINTERS.has(e.pointerId)) boardUp(e); });   // (capture gone without a pointerup)
   stage.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !EDIT.drag) EDIT.hover = null; });
   stage.addEventListener('wheel', boardWheel, { passive: false });
   stage.addEventListener('dblclick', boardDblClick);
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
 }
+window.addEventListener('blur', clearPointers);
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearPointers(); });
 function attachTray() {
   for (const type of PIECE_TYPES) {
     const b = TRAY_BTNS[type];
@@ -10699,6 +11263,7 @@ function useCanvas2D() {
   rendererName = 'canvas2d';
   if (GLR.gl) {
     try { const lc = GLR.gl.getExtension('WEBGL_lose_context'); if (lc && !GLR.gl.isContextLost()) lc.loseContext(); } catch (e) { /* gone */ }
+    clearPointers();                                // (a gesture under the old canvas can no longer end)
     const fresh = stage.cloneNode(false);
     fresh.__inputAttached = false;
     stage.replaceWith(fresh); stage = fresh;
@@ -10975,7 +11540,7 @@ window.marbleMusic = {
   // opened (a run being followed stays followed)
   get camera() { return cameraState(); },
   setCamera(o) { return setCameraState(o); },
-  resetView() { resetView(); return cameraState(); },
+  resetView() { resetView(0); return cameraState(); },
   get cameraLimits() { return { yaw: [-CAMERA.yawMax / RAD, CAMERA.yawMax / RAD], pitch: [CAMERA.pitchMin / RAD, CAMERA.pitchMax / RAD], zoom: [ZOOM_MIN, zoomMax()] }; },
   debugCloseUp: DEV ? (...a) => debugCloseUp(...a) : undefined,
 };
