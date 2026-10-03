@@ -10,7 +10,7 @@ Guests enter the shared invitation code, browse the Amazon.ae gift ideas, filter
 public/             the whole site: HTML, CSS, JS, gift data, product images
 firestore.rules     who can read and create reservations
 firebase.json       Firebase project settings (auth + rules)
-.github/workflows/  deploys public/ to GitHub Pages on every push to main
+.github/workflows/  deploys public/ to GitHub Pages, refreshes prices every morning, applies Remove/Keep decisions
 ```
 
 - Entering the invitation code signs the guest into a shared Firebase account. The Firestore rules only let that account read or create reservations.
@@ -49,6 +49,26 @@ It needs Node 22.21 or newer and no packages. Safety rules, all listed in the re
 If something needs a look (a held price, a gift added to or missing from the Amazon wishlist, a gift bought on Amazon, or a failed run), the run opens one issue labelled `price-review` with the report, keeps it up to date, and closes it once everything is clear. The full report is also on each run's summary page.
 
 `scripts/ignore.json` lists gifts the host has already looked at. A gift on it keeps its price on the site however far Amazon's price moves (Amazon shows some items at a different price depending on location), and a wishlist item on it that is deliberately not on the site isn't reported as new. Remove an id from the list to have it flagged again.
+
+### Price-jump alerts on WhatsApp
+
+When a gift's Amazon price moves by more than 25% (and a guest hasn't reserved it), the morning job sends a WhatsApp message, once per gift, to everyone in the `CALLMEBOT_RECIPIENTS` secret. The message shows the gift, the old and new price, the Amazon link, and two links:
+
+- **Remove it from the list**
+- **Keep it at the new price**
+
+Tapping one opens a pre-filled GitHub issue. Press "Submit new issue" and within a minute the gift list changes, the site redeploys, and the issue closes with a note saying what happened (`.github/workflows/gift-decision.yml`). Only the repository owner and collaborators can do this, a gift a guest has already reserved is never removed or repriced, and a removed gift is added to `scripts/ignore.json` so the morning check doesn't report it as new. If nobody does anything, the site keeps the old price and the open `price-review` issue keeps listing it.
+
+Messages are sent through [CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/), a free, unofficial WhatsApp relay. Each person who should get the messages follows CallMeBot's one-time setup on their own phone, which gives them a personal API key.
+
+### Repository secrets
+
+Set these under GitHub, Settings, Secrets and variables, Actions, New repository secret:
+
+| Secret | Value | Used for |
+| --- | --- | --- |
+| `INVITE_CODE` | The current 4-digit invitation code | Reading which gifts are reserved, so they are left alone |
+| `CALLMEBOT_RECIPIENTS` | `+971XXXXXXXXX:apikey`, comma-separated for several people | The WhatsApp alerts. Optional: without it nobody is messaged, and held prices still show in the issue |
 
 ## Previewing locally
 

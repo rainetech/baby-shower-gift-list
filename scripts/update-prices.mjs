@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Refreshes the Amazon.ae wishlist prices and rewrites public/gifts-full.js.
 //
-//   INVITE_CODE=<code> node scripts/update-prices.mjs [--dry-run] [--ignore-reservations]
+//   INVITE_CODE=<code> node scripts/update-prices.mjs [--dry-run] [--ignore-reservations] [--json=report.json]
 //
 // Prints a Markdown report. Exit code 0 = ran (check the report), 1 = the prices could not be refreshed.
 import { spawnSync } from "node:child_process";
@@ -92,6 +92,10 @@ if (result.amazon && !args.has("--dry-run")) {
   writeFileSync(root + "gifts-full.js", renderGiftsModule(nextGifts, amazonDate));
   result.wrote = true;
 }
+
+// Machine-readable copy for the notification step (--json=<path>).
+const jsonPath = process.argv.slice(2).find((arg) => arg.startsWith("--json="))?.slice("--json=".length);
+if (jsonPath) writeFileSync(jsonPath, JSON.stringify({ today, held: result.amazon?.held ?? [], failed: Boolean(result.amazonError) }, null, 2));
 
 console.log(renderReport(result));
 process.exit(result.amazon ? 0 : 1);
