@@ -249,6 +249,7 @@ select { min-height: 42px; padding: 0 12px; color: var(--ink); background: white
 .retailer-name { font-size: .78rem; font-weight: 700; }
 .offer-date { margin-left: 6px; color: #93878b; font-size: .62rem; font-weight: 500; }
 .alternative-price { font-size: .84rem; }
+.alternative-price.is-link-only { color: var(--muted); font-size: .74rem; font-weight: 600; }
 .price-checked { display: block; margin-top: 6px; color: #93878b; font-size: .62rem; }
 .gift-actions { display: flex; align-items: center; gap: 10px; margin-top: auto; }
 .amazon-link { color: var(--berry); font-size: .8rem; font-weight: 700; text-decoration: none; }

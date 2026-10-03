@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import { collection, doc, getFirestore, onSnapshot, serverTimestamp, setDoc } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 import { firebaseConfig, registryUserEmail } from "./firebase-config.js";
-import { gifts } from "./gifts-full.js";
+import { amazonPricesCheckedOn, gifts } from "./gifts-full.js";
 import { alternativePrices, priceCheckDate } from "./alternative-prices.js";
 
 const REGISTRY_ID = "rochelle-and-christopher";
@@ -31,6 +31,7 @@ const dialogGiftName = document.querySelector("#dialog-gift-name");
 const guestName = document.querySelector("#guest-name");
 const reserveMessage = document.querySelector("#reserve-message");
 const dialogClose = document.querySelector(".dialog-close");
+const priceFootnote = document.querySelector("#price-footnote");
 
 let activeGift = null;
 let reservations = new Map();
@@ -108,36 +109,49 @@ function renderPriceFilter() {
 }
 
 function renderOffers(fragment, gift, amazonPrice) {
-  const offers = [...(alternativePrices[gift.id] ?? [])].sort((a, b) => a.value - b.value);
+  // Sold-out offers stay in the data (so they can come back) but are not shown. Priced offers come
+  // first, cheapest first; link-only offers (no price checked) follow.
+  const offers = (alternativePrices[gift.id] ?? [])
+    .filter((offer) => !offer.soldOut)
+    .sort((a, b) => (a.value ?? Infinity) - (b.value ?? Infinity));
   if (!offers.length) return;
 
   // Offers without `checked` were verified on priceCheckDate. Older snapshots carry their own date
   // and are not used for the saving label unless they are all we have.
   const isCurrent = (offer) => !offer.checked || offer.checked === priceCheckDate;
-  const basis = (offers.find(isCurrent) ?? offers[0]);
-  const checkedOn = isCurrent(basis) ? priceCheckDate : basis.checked;
+  const priced = offers.filter((offer) => offer.value != null);
+  const basis = priced.find(isCurrent) ?? priced[0];
 
   const comparison = fragment.querySelector(".price-comparison");
   const list = fragment.querySelector(".offer-list");
   comparison.hidden = false;
   fragment.querySelector(".comparison-title").textContent = offers.length > 1 ? "Exact UAE matches" : "Exact UAE match";
-  fragment.querySelector(".saving-label").textContent = comparisonLabel(amazonPrice, basis.value);
-  fragment.querySelector(".price-checked").textContent = `Prices checked ${checkedOn}`;
-  if (amazonPrice !== null && basis.value < amazonPrice) comparison.classList.add("is-cheaper");
+  fragment.querySelector(".price-checked").textContent = basis
+    ? `Prices checked ${isCurrent(basis) ? priceCheckDate : basis.checked}`
+    : "Price not checked, please look at the retailer";
+  if (basis) {
+    fragment.querySelector(".saving-label").textContent = comparisonLabel(amazonPrice, basis.value);
+    if (amazonPrice !== null && basis.value < amazonPrice) comparison.classList.add("is-cheaper");
+  }
 
   offers.forEach((offer) => {
     const item = offerTemplate.content.cloneNode(true);
     const link = item.querySelector(".alternative-link");
-    const age = isCurrent(offer) ? "" : ` (price from ${offer.checked})`;
+    const linkOnly = offer.value == null;
+    const age = linkOnly || isCurrent(offer) ? "" : ` (price from ${offer.checked})`;
     link.href = offer.url;
-    link.setAttribute("aria-label", `View ${gift.name} at ${offer.retailer} for ${offer.price}${age}`);
+    link.setAttribute("aria-label", linkOnly
+      ? `View ${gift.name} at ${offer.retailer} (price not checked)`
+      : `View ${gift.name} at ${offer.retailer} for ${offer.price}${age}`);
     item.querySelector(".retailer-label").textContent = offer.retailer;
-    if (!isCurrent(offer)) {
+    if (!linkOnly && !isCurrent(offer)) {
       const date = item.querySelector(".offer-date");
       date.hidden = false;
       date.textContent = `as of ${offer.checked.replace(/ \d{4}$/, "")}`;
     }
-    item.querySelector(".alternative-price").textContent = offer.price;
+    const price = item.querySelector(".alternative-price");
+    price.textContent = linkOnly ? "Check price" : offer.price;
+    if (linkOnly) price.classList.add("is-link-only");
     list.append(item);
   });
 }
@@ -279,6 +293,7 @@ reserveDialog.addEventListener("click", (event) => {
   if (event.target === reserveDialog) reserveDialog.close();
 });
 
+priceFootnote.textContent = `Amazon prices checked ${amazonPricesCheckedOn}; other UAE retailers checked ${priceCheckDate}. Prices are snapshots and may change. Delivery charges are not included.`;
 renderPriceFilter();
 
 onAuthStateChanged(auth, (user) => {
