@@ -21,7 +21,7 @@ firebase.json       Firebase project settings (auth + rules)
 
 - **Seeing reservations.** Firebase Console, Firestore Database, `registries/rochelle-and-christopher/reservations`. Each document is one gift: `itemId`, `name`, `reservedAt`.
 - **Fixing a mistaken reservation.** Delete that document in the Firebase Console. The gift becomes available again straight away.
-- **Changing the invitation code.** In Firebase Console, Authentication, open the registry user and set its password to `registry-<new 4 digits>-access`. The code is exactly 4 digits.
+- **Changing the invitation code.** The code is exactly 4 digits and is the password of the registry user in Firebase Authentication, stored as `registry-<code>-access`. The Firebase Console can't set a new password directly (its "Reset password" sends an email, and this user's address is not a real one), so use the Firebase Auth admin API or the Admin SDK to set the registry user's password. Then update the `INVITE_CODE` secret (see "Keeping prices fresh"), or the morning price job will stop and raise an issue. Guests signed in with the old code are signed out and need the new one.
 - **Updating the gift list.** Gifts are in `public/gifts-full.js` and their images in `public/assets/<ASIN>.jpg`. Reservations are keyed by ASIN, so a reservation for a removed gift stays in Firestore but no longer shows.
 - Amazon prices are snapshots and may change. Delivery charges are not included.
 
@@ -39,6 +39,7 @@ It needs Node 22.21 or newer and no packages. Safety rules, all listed in the re
 
 - A price that moves by more than 25% is **held for review**, not applied. Amazon sometimes shows a different offer depending on where the page is fetched from, so a few prices can differ from what you see in the UAE.
 - If the wishlist scrape finds fewer than 80% of the gifts, or Amazon serves a bot check, nothing is changed.
+- **Gifts a guest has already reserved are never touched**: no price change and no alert. To know which are reserved, the job signs in as the guest account and reads Firestore, so it needs the invitation code in a repository secret named `INVITE_CODE` (GitHub, Settings, Secrets and variables, Actions, New repository secret). If the secret is missing or wrong, the job changes nothing and opens the issue. For a manual run on your own machine: `INVITE_CODE=<code> node scripts/update-prices.mjs`, or add `--ignore-reservations` to skip the check.
 - Only the `price` of a gift ever changes. Items added to or missing from the Amazon wishlist are reported but **not** added or removed. Adding a gift means adding its image and name by hand.
 
 ### Every morning, automatically

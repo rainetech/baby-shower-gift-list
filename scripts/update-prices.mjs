@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Refreshes the Amazon.ae wishlist prices and rewrites public/gifts-full.js.
 //
-//   node scripts/update-prices.mjs [--dry-run]
+//   INVITE_CODE=<code> node scripts/update-prices.mjs [--dry-run] [--ignore-reservations]
 //
 // Prints a Markdown report. Exit code 0 = ran (check the report), 1 = the prices could not be refreshed.
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { fetchWishlist } from "./lib/amazon.mjs";
+import { fetchReservedIds } from "./lib/reservations.mjs";
 import { applyAmazonPrices, renderGiftsModule, renderReport } from "./lib/update.mjs";
 
 // Node's fetch ignores proxy settings unless NODE_USE_ENV_PROXY is set (Node 22.21+); sandboxed
@@ -71,9 +72,15 @@ let nextGifts = gifts;
 let amazonDate = previousAmazonDate;
 
 try {
+  // Gifts a guest has already reserved are never touched, so find out which they are first. If that
+  // fails, nothing is changed (--ignore-reservations skips the check for a manual run).
+  const { firebaseConfig, registryUserEmail } = await load("firebase-config.js");
+  const taken = args.has("--ignore-reservations")
+    ? new Set()
+    : await fetchReservedIds({ firebaseConfig, email: registryUserEmail, code: process.env.INVITE_CODE });
   const scraped = await fetchWishlist(createFetcher());
   const acknowledged = new Set(JSON.parse(readFileSync(new URL("./ignore.json", import.meta.url), "utf8")));
-  const applied = applyAmazonPrices(gifts, scraped, { acknowledged });
+  const applied = applyAmazonPrices(gifts, scraped, { acknowledged, taken });
   nextGifts = applied.gifts;
   result.amazon = applied.report;
   amazonDate = today;

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { fetchWishlist, isBotCheck, nextPageUrl, parseWishlistPage } from "../scripts/lib/amazon.mjs";
 import { decodeEntities, formatAed, parseAed } from "../scripts/lib/html.mjs";
+import { fetchReservedIds } from "../scripts/lib/reservations.mjs";
 import { applyAmazonPrices, renderGiftsModule } from "../scripts/lib/update.mjs";
 
 const wishlistPage = readFileSync(new URL("./fixtures/wishlist-page.html", import.meta.url), "utf8");
@@ -77,6 +78,18 @@ describe("applyAmazonPrices", () => {
     assert.deepEqual(applyAmazonPrices(gifts, scrape, { acknowledged: new Set(["Z"]) }).report.added, []);
   });
 
+  it("leaves gifts a guest has already reserved exactly as they are, with no price change and no alert", () => {
+    const scrape = [scraped("A", 110), scraped("B", 91.25), scraped("C", 20), scraped("D", 10), scraped("E", 10)];
+    const { gifts: next, report } = applyAmazonPrices(gifts, scrape, { taken: new Set(["A", "B"]) });
+    assert.deepEqual(next.slice(0, 2), gifts.slice(0, 2));
+    assert.deepEqual(report.applied, []);
+    assert.deepEqual(report.held, []);
+    assert.equal(report.taken, 2);
+    // Without the taken set the same scrape applies A and holds B.
+    const normal = applyAmazonPrices(gifts, scrape).report;
+    assert.deepEqual([normal.applied.map((r) => r.id), normal.held.map((r) => r.id)], [["A"], ["B"]]);
+  });
+
   it("only ever changes the price field", () => {
     const { gifts: next } = applyAmazonPrices(gifts, [scraped("A", 110), scraped("B", 55), scraped("C", 21), scraped("D", 11), scraped("E", 9)]);
     next.forEach((g, i) => assert.deepEqual({ ...g, price: null }, { ...gifts[i], price: null }));
@@ -109,5 +122,45 @@ describe("rendered data files", () => {
     const mod = await importSource(renderGiftsModule(gifts, "3 Oct 2026"));
     assert.deepEqual(mod.gifts, gifts);
     assert.equal(mod.amazonPricesCheckedOn, "3 Oct 2026");
+  });
+});
+
+describe("fetchReservedIds", () => {
+  const firebaseConfig = { apiKey: "KEY", projectId: "proj" };
+  const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
+  const fakeFetch = (handlers) => {
+    const calls = [];
+    const fn = async (url, options = {}) => { calls.push({ url, options }); return handlers.shift()(url, options); };
+    fn.calls = calls;
+    return fn;
+  };
+
+  it("signs in the way the site does, then lists reserved gift ids across pages", async () => {
+    const fetchImpl = fakeFetch([
+      () => json(200, { idToken: "TOKEN" }),
+      () => json(200, { documents: [{ name: "projects/proj/databases/(default)/documents/registries/rochelle-and-christopher/reservations/B0AAAAAAAA" }], nextPageToken: "NEXT" }),
+      () => json(200, { documents: [{ name: ".../reservations/B0BBBBBBBB" }] })
+    ]);
+    const ids = await fetchReservedIds({ firebaseConfig, email: "guest@example.test", code: "1234", fetchImpl });
+    assert.deepEqual([...ids], ["B0AAAAAAAA", "B0BBBBBBBB"]);
+    const [signIn, page1, page2] = fetchImpl.calls;
+    assert.equal(signIn.url, "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=KEY");
+    assert.deepEqual(JSON.parse(signIn.options.body), { email: "guest@example.test", password: "registry-1234-access", returnSecureToken: true });
+    assert.match(page1.url, /^https:\/\/firestore\.googleapis\.com\/v1\/projects\/proj\/databases\/\(default\)\/documents\/registries\/rochelle-and-christopher\/reservations\?pageSize=300$/);
+    assert.equal(page1.options.headers.authorization, "Bearer TOKEN");
+    assert.match(page2.url, /pageToken=NEXT$/);
+  });
+
+  it("returns an empty set when nothing is reserved yet", async () => {
+    const fetchImpl = fakeFetch([() => json(200, { idToken: "T" }), () => json(200, {})]);
+    assert.equal((await fetchReservedIds({ firebaseConfig, email: "e", code: "1234", fetchImpl })).size, 0);
+  });
+
+  it("fails clearly, without leaking the code, when it can't sign in, can't read, or has no code", async () => {
+    const badLogin = fakeFetch([() => json(400, { error: { message: "INVALID_LOGIN_CREDENTIALS" } })]);
+    await assert.rejects(fetchReservedIds({ firebaseConfig, email: "e", code: "9876", fetchImpl: badLogin }), (error) => /INVALID_LOGIN_CREDENTIALS/.test(error.message) && /INVITE_CODE/.test(error.message) && !error.message.includes("9876"));
+    const denied = fakeFetch([() => json(200, { idToken: "T" }), () => json(403, { error: { message: "Missing or insufficient permissions." } })]);
+    await assert.rejects(fetchReservedIds({ firebaseConfig, email: "e", code: "1234", fetchImpl: denied }), /insufficient permissions/);
+    await assert.rejects(fetchReservedIds({ firebaseConfig, email: "e", code: "", fetchImpl: fakeFetch([]) }), /INVITE_CODE is not set/);
   });
 });

@@ -35,6 +35,8 @@ jobs:
       - name: Refresh prices
         id: refresh
         shell: bash
+        env:
+          INVITE_CODE: ${{ secrets.INVITE_CODE }}
         run: |
           set +e
           node scripts/update-prices.mjs > price-report.md
