@@ -1,3 +1,4 @@
+import { decisionLinks } from "./decision.mjs";
 import { formatAed } from "./html.mjs";
 
 const MAX_MESSAGES_PER_RUN = 5;
@@ -13,16 +14,7 @@ export function parseRecipients(value = "") {
   }).filter((recipient) => recipient?.phone && recipient.key);
 }
 
-// Links that open a pre-filled GitHub issue. Tapping "Submit new issue" is what triggers the change
-// (see .github/workflows/gift-decision.yml), and only the owner and collaborators can trigger it.
-export function decisionLinks(repository, held) {
-  const base = `https://github.com/${repository}/issues/new`;
-  const link = (title) => `${base}?title=${encodeURIComponent(title)}&body=${encodeURIComponent("Created from a price alert. Press Submit new issue to apply.")}`;
-  return {
-    remove: link(`Remove gift ${held.id}`),
-    keep: link(`Keep gift ${held.id} at ${formatAed(held.to)}`)
-  };
-}
+export { decisionLinks };
 
 export function formatMessage(repository, held) {
   const change = Math.round(((held.to - held.from) / held.from) * 100);

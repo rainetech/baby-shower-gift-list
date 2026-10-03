@@ -50,25 +50,21 @@ If something needs a look (a held price, a gift added to or missing from the Ama
 
 `scripts/ignore.json` lists gifts the host has already looked at. A gift on it keeps its price on the site however far Amazon's price moves (Amazon shows some items at a different price depending on location), and a wishlist item on it that is deliberately not on the site isn't reported as new. Remove an id from the list to have it flagged again.
 
-### Price-jump alerts on WhatsApp
+### Big price jumps: Remove or Keep
 
-When a gift's Amazon price moves by more than 25% (and a guest hasn't reserved it), the morning job sends a WhatsApp message, once per gift, to everyone in the `CALLMEBOT_RECIPIENTS` secret. The message shows the gift, the old and new price, the Amazon link, and two links:
+When a gift's Amazon price moves by more than 25% (and a guest hasn't reserved it), the site keeps the old price and the open `price-review` issue lists it with two links: **Remove it from the list** and **keep it at the new price**.
 
-- **Remove it from the list**
-- **Keep it at the new price**
+Tapping one opens a pre-filled GitHub issue. Press "Submit new issue" and within a minute the gift list changes, the site redeploys, and the issue closes with a note saying what happened (`.github/workflows/gift-decision.yml`). Only the repository owner and collaborators can do this, a gift a guest has already reserved is never removed or repriced, and a removed gift is added to `scripts/ignore.json` so the morning check doesn't report it as new. If nobody does anything, the site keeps the old price.
 
-Tapping one opens a pre-filled GitHub issue. Press "Submit new issue" and within a minute the gift list changes, the site redeploys, and the issue closes with a note saying what happened (`.github/workflows/gift-decision.yml`). Only the repository owner and collaborators can do this, a gift a guest has already reserved is never removed or repriced, and a removed gift is added to `scripts/ignore.json` so the morning check doesn't report it as new. If nobody does anything, the site keeps the old price and the open `price-review` issue keeps listing it.
+WhatsApp alerts are not switched on. The code for sending them through CallMeBot is in `scripts/lib/notify.mjs` and `scripts/notify-held.mjs` (with tests), but no workflow step calls it.
 
-Messages are sent through [CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/), a free, unofficial WhatsApp relay. Each person who should get the messages follows CallMeBot's one-time setup on their own phone, which gives them a personal API key.
+### Repository secret
 
-### Repository secrets
-
-Set these under GitHub, Settings, Secrets and variables, Actions, New repository secret:
+Set this under GitHub, Settings, Secrets and variables, Actions, New repository secret:
 
 | Secret | Value | Used for |
 | --- | --- | --- |
 | `INVITE_CODE` | The current 4-digit invitation code | Reading which gifts are reserved, so they are left alone |
-| `CALLMEBOT_RECIPIENTS` | `+971XXXXXXXXX:apikey`, comma-separated for several people | The WhatsApp alerts. Optional: without it nobody is messaged, and held prices still show in the issue |
 
 ## Previewing locally
 

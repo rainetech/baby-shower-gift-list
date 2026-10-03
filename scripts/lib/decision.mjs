@@ -39,3 +39,14 @@ export function applyDecision(gifts, ignore, decision, { reserved }) {
     deleteImage: null
   };
 }
+
+// Links that open a pre-filled GitHub issue. Pressing "Submit new issue" is what triggers the change
+// (see .github/workflows/gift-decision.yml), and only the owner and collaborators can trigger it.
+export function decisionLinks(repository, held) {
+  const base = `https://github.com/${repository}/issues/new`;
+  const link = (title) => `${base}?title=${encodeURIComponent(title)}&body=${encodeURIComponent("Created from a price alert. Press Submit new issue to apply.")}`;
+  return {
+    remove: link(`Remove gift ${held.id}`),
+    keep: link(`Keep gift ${held.id} at ${formatAed(held.to)}`)
+  };
+}

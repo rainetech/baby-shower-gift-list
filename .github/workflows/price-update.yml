@@ -39,7 +39,7 @@ jobs:
           INVITE_CODE: ${{ secrets.INVITE_CODE }}
         run: |
           set +e
-          node scripts/update-prices.mjs --json=price-report.json > price-report.md
+          node scripts/update-prices.mjs > price-report.md
           echo "status=$?" >> "$GITHUB_OUTPUT"
           cat price-report.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -61,23 +61,6 @@ jobs:
           git push origin HEAD:main
           gh workflow run pages.yml --ref main
 
-      - name: Message the host about big price jumps
-        if: always() && steps.refresh.outputs.status == '0'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CALLMEBOT_RECIPIENTS: ${{ secrets.CALLMEBOT_RECIPIENTS }}
-        run: |
-          # The open price-review issue remembers which gifts have already been messaged.
-          number=$(gh issue list --state open --label price-review --json number --jq '.[0].number // empty')
-          notified=""
-          if [ -n "$number" ]; then
-            notified=$(gh issue view "$number" --json body --jq .body | sed -n 's/.*<!-- notified: \([A-Z0-9,]*\) -->.*/\1/p' | head -n 1)
-          fi
-          NOTIFIED="$notified" node scripts/notify-held.mjs price-report.json > notify-report.md || true
-          grep -q 'notified:' notify-report.md || echo "<!-- notified: $notified -->" >> notify-report.md
-          cat notify-report.md >> "$GITHUB_STEP_SUMMARY"
-
       - name: Flag anything that needs a look
         if: always()
         shell: bash
@@ -95,8 +78,6 @@ jobs:
               echo "Latest run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
               echo
               cat price-report.md 2>/dev/null || echo "The price script did not produce a report. Check the run log."
-              echo
-              cat notify-report.md 2>/dev/null || true
             } > issue-body.md
             gh label create price-review --color FBCA04 --description "The morning price update needs the host's attention" 2>/dev/null || true
             if [ -n "$number" ]; then

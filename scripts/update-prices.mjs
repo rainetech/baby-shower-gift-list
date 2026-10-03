@@ -97,5 +97,5 @@ if (result.amazon && !args.has("--dry-run")) {
 const jsonPath = process.argv.slice(2).find((arg) => arg.startsWith("--json="))?.slice("--json=".length);
 if (jsonPath) writeFileSync(jsonPath, JSON.stringify({ today, held: result.amazon?.held ?? [], failed: Boolean(result.amazonError) }, null, 2));
 
-console.log(renderReport(result));
+console.log(renderReport({ ...result, repository: process.env.GITHUB_REPOSITORY }));
 process.exit(result.amazon ? 0 : 1);

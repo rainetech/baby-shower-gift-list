@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { fetchWishlist, isBotCheck, nextPageUrl, parseWishlistPage } from "../scripts/lib/amazon.mjs";
 import { decodeEntities, formatAed, parseAed } from "../scripts/lib/html.mjs";
 import { fetchReservedIds } from "../scripts/lib/reservations.mjs";
-import { applyAmazonPrices, renderGiftsModule } from "../scripts/lib/update.mjs";
+import { applyAmazonPrices, renderGiftsModule, renderReport } from "../scripts/lib/update.mjs";
 
 const wishlistPage = readFileSync(new URL("./fixtures/wishlist-page.html", import.meta.url), "utf8");
 const importSource = (source) => import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
@@ -162,5 +162,20 @@ describe("fetchReservedIds", () => {
     const denied = fakeFetch([() => json(200, { idToken: "T" }), () => json(403, { error: { message: "Missing or insufficient permissions." } })]);
     await assert.rejects(fetchReservedIds({ firebaseConfig, email: "e", code: "1234", fetchImpl: denied }), /insufficient permissions/);
     await assert.rejects(fetchReservedIds({ firebaseConfig, email: "e", code: "", fetchImpl: fakeFetch([]) }), /INVITE_CODE is not set/);
+  });
+});
+
+describe("renderReport", () => {
+  const amazon = { applied: [], held: [{ id: "B0AAAAAAAA", name: "Gift A", from: 29, to: 37.21 }], acknowledged: 0, taken: 0, unchanged: 3, missing: [], added: [], boughtOnAmazon: [] };
+
+  it("puts Remove and Keep links under each held price when it knows the repository", () => {
+    const report = renderReport({ today: "4 Oct 2026", amazon, repository: "owner/repo" });
+    assert.match(report, /## HELD FOR REVIEW/);
+    assert.match(report, /\[Remove it from the list\]\(https:\/\/github\.com\/owner\/repo\/issues\/new\?title=Remove%20gift%20B0AAAAAAAA/);
+    assert.match(report, /\[keep it at AED 37\.21\]\(https:\/\/github\.com\/owner\/repo\/issues\/new\?title=Keep%20gift%20B0AAAAAAAA%20at%20AED%2037\.21/);
+  });
+
+  it("omits the links for a local run", () => {
+    assert.ok(!renderReport({ today: "4 Oct 2026", amazon }).includes("issues/new"));
   });
 });

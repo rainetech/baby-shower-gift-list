@@ -1,3 +1,4 @@
+import { decisionLinks } from "./decision.mjs";
 import { formatAed, parseAed } from "./html.mjs";
 
 // Applies freshly scraped Amazon prices to the gift list. A price that moved by more than `maxChange`
@@ -58,7 +59,7 @@ export const gifts = ${JSON.stringify(gifts, null, 2)};
 const money = (value) => `AED ${Number(value).toFixed(2)}`;
 const short = (text, length = 60) => (text.length > length ? `${text.slice(0, length - 1)}…` : text);
 
-export function renderReport({ today, amazon, amazonError, wrote }) {
+export function renderReport({ today, amazon, amazonError, wrote, repository }) {
   const lines = [`# Price update, ${today}`, ""];
   const section = (title, rows) => { if (rows.length) lines.push(`## ${title}`, ...rows, ""); };
 
@@ -66,7 +67,11 @@ export function renderReport({ today, amazon, amazonError, wrote }) {
   if (amazon) {
     lines.push(`Amazon: ${amazon.applied.length} updated, ${amazon.unchanged} unchanged, ${amazon.held.length} held for review${amazon.acknowledged ? `, ${amazon.acknowledged} already acknowledged in scripts/ignore.json` : ""}${amazon.taken ? `, ${amazon.taken} already taken by a guest (left alone)` : ""}.`, "");
     section("Amazon prices updated", amazon.applied.map((r) => `- ${short(r.name)}: ${r.from === null ? "n/a" : money(r.from)} to ${money(r.to)}`));
-    section("HELD FOR REVIEW (moved more than 25%, not applied)", amazon.held.map((r) => `- ${short(r.name)} (${r.id}): ${money(r.from)} on the site, ${money(r.to)} on Amazon now`));
+    section("HELD FOR REVIEW (moved more than 25%, not applied)", amazon.held.map((r) => {
+      const links = repository ? decisionLinks(repository, r) : null;
+      const choose = links ? ` [Remove it from the list](${links.remove}) or [keep it at ${money(r.to)}](${links.keep}).` : "";
+      return `- ${short(r.name)} (${r.id}): ${money(r.from)} on the site, ${money(r.to)} on Amazon now.${choose}`;
+    }));
     section("Wishlist items not found on Amazon (not removed from the site)", amazon.missing.map((r) => `- ${short(r.name)} (${r.id})`));
     section("New on the Amazon wishlist (not added to the site)", amazon.added.map((r) => `- ${short(r.name ?? r.id)} (${r.id})${r.price ? ` ${money(r.price)}` : ""}`));
     section("Bought on Amazon from the wishlist", amazon.boughtOnAmazon.map((r) => `- ${short(r.name)} (${r.id}): ${r.count}`));
