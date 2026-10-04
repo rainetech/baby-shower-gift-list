@@ -24,10 +24,12 @@ firebase.json       Firebase project settings (auth + rules)
 - **Changing the invitation PIN, when you know the current one.** The PIN is exactly 4 digits and is the password of the shared guest account (stored as `registry-<PIN>-access`). Firebase lets the account change its own password when you know the current one, so no admin access is needed: `OLD_PIN=<current> NEW_PIN=<new> node scripts/change-pin.mjs` (Node 22 or newer), which also checks that the new PIN signs in. Afterwards update the `INVITE_CODE` secret (see "Keeping prices fresh") or the morning price job will stop and raise an issue, and tell guests the new PIN. Guests signed in with the old one are signed out within about an hour.
 - **Changing the PIN when it's forgotten.** There's no "reset password" button in the Firebase Console for this account (its email isn't a real inbox), so recover it by replacing the account instead, entirely from the Console, no coding:
   1. Firebase Console, Authentication, Users. Find `registry@rochelle-and-christopher.example`, open its menu, Delete user.
-  2. Add user. Enter that same email, and a password of `registry-<new PIN>-access` (for example `registry-1126-access`). Add.
+  2. Add user. Enter **that same email** (this matters: the rules below check it), and a password of `registry-<new PIN>-access` (for example `registry-1126-access`). Add.
   3. Update the `INVITE_CODE` secret on GitHub and tell guests the new PIN.
 
-  `firestore.rules` doesn't name a specific account, so this needs no rules change. It works because the site has no public sign-up, so the only account anyone can ever sign in as is the one created here.
+  `firestore.rules` checks the signed-in account's email, not its Firebase-internal id, so this recovery never needs a rules change, as long as step 2 reuses the same email. Firebase projects allow public self-service sign-up by default (a project setting, separate from this site, which never offers it), so the rule can't just check "signed in at all" — it has to confirm *which* account, which is why it checks the email.
+
+  Optional, extra safety: Firebase Console, Authentication, Settings, User actions, turn off "Enable create (sign-up)". This stops anyone from creating their own account in the project at all; the site never needed that ability.
 - **Updating the gift list.** Gifts are in `public/gifts-full.js` and their images in `public/assets/<ASIN>.jpg`. Reservations are keyed by ASIN, so a reservation for a removed gift stays in Firestore but no longer shows.
 - Amazon prices are snapshots and may change. Delivery charges are not included.
 
