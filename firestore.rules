@@ -2,8 +2,14 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Any address can sign itself up in this Firebase project (a default Firebase setting, separate
+    // from this site's own code, which never offers sign-up). So "signed in at all" is not enough:
+    // this checks the signed-in account's email against the one fixed registry address, which is
+    // also what the recovery steps use when the account is deleted and recreated for a forgotten
+    // PIN, so this rule never needs to change when that happens.
     function isRegistryGuest() {
-      return request.auth != null && request.auth.uid == "sW87PrnhWpgglLkmKHkpIIle5ET2";
+      return request.auth != null
+        && request.auth.token.email == "registry@rochelle-and-christopher.example";
     }
 
     match /registries/rochelle-and-christopher/reservations/{itemId} {

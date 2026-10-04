@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { fetchWishlist, isBotCheck, nextPageUrl, parseWishlistPage } from "../scripts/lib/amazon.mjs";
 import { decodeEntities, formatAed, parseAed } from "../scripts/lib/html.mjs";
-import { applyAmazonPrices, renderGiftsModule } from "../scripts/lib/update.mjs";
+import { changePin, derivePassword } from "../scripts/lib/pin.mjs";
+import { fetchReservedIds } from "../scripts/lib/reservations.mjs";
+import { applyAmazonPrices, renderGiftsModule, renderReport } from "../scripts/lib/update.mjs";
 
 const wishlistPage = readFileSync(new URL("./fixtures/wishlist-page.html", import.meta.url), "utf8");
 const importSource = (source) => import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
@@ -77,6 +79,18 @@ describe("applyAmazonPrices", () => {
     assert.deepEqual(applyAmazonPrices(gifts, scrape, { acknowledged: new Set(["Z"]) }).report.added, []);
   });
 
+  it("leaves gifts a guest has already reserved exactly as they are, with no price change and no alert", () => {
+    const scrape = [scraped("A", 110), scraped("B", 91.25), scraped("C", 20), scraped("D", 10), scraped("E", 10)];
+    const { gifts: next, report } = applyAmazonPrices(gifts, scrape, { taken: new Set(["A", "B"]) });
+    assert.deepEqual(next.slice(0, 2), gifts.slice(0, 2));
+    assert.deepEqual(report.applied, []);
+    assert.deepEqual(report.held, []);
+    assert.equal(report.taken, 2);
+    // Without the taken set the same scrape applies A and holds B.
+    const normal = applyAmazonPrices(gifts, scrape).report;
+    assert.deepEqual([normal.applied.map((r) => r.id), normal.held.map((r) => r.id)], [["A"], ["B"]]);
+  });
+
   it("only ever changes the price field", () => {
     const { gifts: next } = applyAmazonPrices(gifts, [scraped("A", 110), scraped("B", 55), scraped("C", 21), scraped("D", 11), scraped("E", 9)]);
     next.forEach((g, i) => assert.deepEqual({ ...g, price: null }, { ...gifts[i], price: null }));
@@ -109,5 +123,107 @@ describe("rendered data files", () => {
     const mod = await importSource(renderGiftsModule(gifts, "3 Oct 2026"));
     assert.deepEqual(mod.gifts, gifts);
     assert.equal(mod.amazonPricesCheckedOn, "3 Oct 2026");
+  });
+});
+
+describe("fetchReservedIds", () => {
+  const firebaseConfig = { apiKey: "KEY", projectId: "proj" };
+  const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
+  const fakeFetch = (handlers) => {
+    const calls = [];
+    const fn = async (url, options = {}) => { calls.push({ url, options }); return handlers.shift()(url, options); };
+    fn.calls = calls;
+    return fn;
+  };
+
+  it("signs in the way the site does, then lists reserved gift ids across pages", async () => {
+    const fetchImpl = fakeFetch([
+      () => json(200, { idToken: "TOKEN" }),
+      () => json(200, { documents: [{ name: "projects/proj/databases/(default)/documents/registries/rochelle-and-christopher/reservations/B0AAAAAAAA" }], nextPageToken: "NEXT" }),
+      () => json(200, { documents: [{ name: ".../reservations/B0BBBBBBBB" }] })
+    ]);
+    const ids = await fetchReservedIds({ firebaseConfig, email: "guest@example.test", code: "1234", fetchImpl });
+    assert.deepEqual([...ids], ["B0AAAAAAAA", "B0BBBBBBBB"]);
+    const [signIn, page1, page2] = fetchImpl.calls;
+    assert.equal(signIn.url, "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=KEY");
+    assert.deepEqual(JSON.parse(signIn.options.body), { email: "guest@example.test", password: "registry-1234-access", returnSecureToken: true });
+    assert.match(page1.url, /^https:\/\/firestore\.googleapis\.com\/v1\/projects\/proj\/databases\/\(default\)\/documents\/registries\/rochelle-and-christopher\/reservations\?pageSize=300$/);
+    assert.equal(page1.options.headers.authorization, "Bearer TOKEN");
+    assert.match(page2.url, /pageToken=NEXT$/);
+  });
+
+  it("returns an empty set when nothing is reserved yet", async () => {
+    const fetchImpl = fakeFetch([() => json(200, { idToken: "T" }), () => json(200, {})]);
+    assert.equal((await fetchReservedIds({ firebaseConfig, email: "e", code: "1234", fetchImpl })).size, 0);
+  });
+
+  it("fails clearly, without leaking the code, when it can't sign in, can't read, or has no code", async () => {
+    const badLogin = fakeFetch([() => json(400, { error: { message: "INVALID_LOGIN_CREDENTIALS" } })]);
+    await assert.rejects(fetchReservedIds({ firebaseConfig, email: "e", code: "9876", fetchImpl: badLogin }), (error) => /INVALID_LOGIN_CREDENTIALS/.test(error.message) && /INVITE_CODE/.test(error.message) && !error.message.includes("9876"));
+    const denied = fakeFetch([() => json(200, { idToken: "T" }), () => json(403, { error: { message: "Missing or insufficient permissions." } })]);
+    await assert.rejects(fetchReservedIds({ firebaseConfig, email: "e", code: "1234", fetchImpl: denied }), /insufficient permissions/);
+    await assert.rejects(fetchReservedIds({ firebaseConfig, email: "e", code: "", fetchImpl: fakeFetch([]) }), /INVITE_CODE is not set/);
+  });
+});
+
+describe("renderReport", () => {
+  const amazon = { applied: [], held: [{ id: "B0AAAAAAAA", name: "Gift A", from: 29, to: 37.21 }], acknowledged: 0, taken: 0, unchanged: 3, missing: [], added: [], boughtOnAmazon: [] };
+
+  it("puts Remove and Keep links under each held price when it knows the repository", () => {
+    const report = renderReport({ today: "4 Oct 2026", amazon, repository: "owner/repo" });
+    assert.match(report, /## HELD FOR REVIEW/);
+    assert.match(report, /\[Remove it from the list\]\(https:\/\/github\.com\/owner\/repo\/issues\/new\?title=Remove%20gift%20B0AAAAAAAA/);
+    assert.match(report, /\[keep it at AED 37\.21\]\(https:\/\/github\.com\/owner\/repo\/issues\/new\?title=Keep%20gift%20B0AAAAAAAA%20at%20AED%2037\.21/);
+  });
+
+  it("omits the links for a local run", () => {
+    assert.ok(!renderReport({ today: "4 Oct 2026", amazon }).includes("issues/new"));
+  });
+});
+
+describe("changePin", () => {
+  const firebaseConfig = { apiKey: "KEY" };
+  const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
+  const script = (...replies) => {
+    const calls = [];
+    const fn = async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return replies.shift()(); };
+    fn.calls = calls;
+    return fn;
+  };
+
+  it("derives the password the way the site does", () => {
+    assert.equal(derivePassword("1126"), "registry-1126-access");
+  });
+
+  it("signs in with the old PIN, sets the new password, then proves the new PIN works", async () => {
+    const fetchImpl = script(() => json(200, { idToken: "OLDTOKEN" }), () => json(200, { localId: "u" }), () => json(200, { idToken: "NEWTOKEN" }));
+    assert.equal(await changePin({ firebaseConfig, email: "g@example.test", oldPin: "1111", newPin: "1126", fetchImpl }), true);
+    const [signIn, update, verify] = fetchImpl.calls;
+    assert.match(signIn.url, /accounts:signInWithPassword\?key=KEY$/);
+    assert.equal(signIn.body.password, "registry-1111-access");
+    assert.match(update.url, /accounts:update\?key=KEY$/);
+    assert.deepEqual(update.body, { idToken: "OLDTOKEN", password: "registry-1126-access", returnSecureToken: false });
+    assert.equal(verify.body.password, "registry-1126-access");
+  });
+
+  it("changes nothing, and says so, when the current PIN is wrong", async () => {
+    const fetchImpl = script(() => json(400, { error: { message: "INVALID_LOGIN_CREDENTIALS" } }));
+    await assert.rejects(changePin({ firebaseConfig, email: "e", oldPin: "9999", newPin: "1126", fetchImpl }), (e) => /current PIN was not accepted/.test(e.message) && /nothing was changed/.test(e.message));
+    assert.equal(fetchImpl.calls.length, 1);
+  });
+
+  it("reports a refused change or a failed check without leaking either PIN", async () => {
+    const refused = script(() => json(200, { idToken: "T" }), () => json(400, { error: { message: "WEAK_PASSWORD" } }));
+    await assert.rejects(changePin({ firebaseConfig, email: "e", oldPin: "1111", newPin: "1126", fetchImpl: refused }), (e) => /still works/.test(e.message) && !/1111|1126/.test(e.message));
+    const unverified = script(() => json(200, { idToken: "T" }), () => json(200, {}), () => json(400, { error: { message: "INVALID_LOGIN_CREDENTIALS" } }));
+    await assert.rejects(changePin({ firebaseConfig, email: "e", oldPin: "1111", newPin: "1126", fetchImpl: unverified }), (e) => /new PIN did not work/.test(e.message) && !/1111|1126/.test(e.message));
+  });
+
+  it("insists on two different 4-digit PINs before calling anything", async () => {
+    const fetchImpl = script();
+    for (const [oldPin, newPin] of [["111", "1126"], ["1111", "11260"], ["abcd", "1126"], [undefined, "1126"], ["1126", "1126"]]) {
+      await assert.rejects(changePin({ firebaseConfig, email: "e", oldPin, newPin, fetchImpl }), /4 digits|same as the current/);
+    }
+    assert.equal(fetchImpl.calls.length, 0);
   });
 });

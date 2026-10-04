@@ -1,0 +1,80 @@
+name: Apply gift decision
+
+# Tapping a "Remove it" or "Keep it" link in a price alert opens a GitHub issue with a fixed title,
+# for example "Remove gift B0C65Z31KS". Submitting it runs this workflow, which changes the gift list,
+# redeploys the site and closes the issue. Only the owner and collaborators can trigger it.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write # commit the change to main
+  actions: write  # start the Pages deploy
+  issues: write   # reply on, and close, the issue
+
+concurrency:
+  group: gift-decision
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    if: >-
+      (startsWith(github.event.issue.title, 'Remove gift ') || startsWith(github.event.issue.title, 'Keep gift ')) &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Apply the decision
+        id: decide
+        shell: bash
+        env:
+          TITLE: ${{ github.event.issue.title }}
+          INVITE_CODE: ${{ secrets.INVITE_CODE }}
+        run: |
+          set +e
+          node scripts/apply-decision.mjs > decision.md
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the change
+        if: steps.decide.outputs.status == '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A public scripts/ignore.json
+          if git diff --cached --quiet; then
+            echo "Nothing to publish."
+            exit 0
+          fi
+          git commit -m "Apply gift decision from issue #${NUMBER}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          gh workflow run pages.yml --ref main
+          echo >> decision.md
+          echo "The live site updates within a minute or two." >> decision.md
+
+      - name: Reply and close the issue
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          if [ ! -s decision.md ] || { [ "${{ steps.decide.outputs.status }}" != "0" ] && [ "${{ steps.decide.outputs.status }}" != "2" ]; }; then
+            echo "Something went wrong applying this, so nothing was confirmed. Check the run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > decision.md
+          fi
+          gh issue comment "$NUMBER" --body-file decision.md
+          gh issue close "$NUMBER"
