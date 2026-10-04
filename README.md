@@ -1,4 +1,4 @@
-# Rochelle & Christopher's Baby Shower Gift List
+# Rochelle's Baby Shower Gift List
 
 A private-entry baby shower gift registry hosted with GitHub Pages and backed by Firebase Authentication and Cloud Firestore.
 
