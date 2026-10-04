@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "3 Oct 2026";
+export const amazonPricesCheckedOn = "4 Oct 2026";
 
 export const gifts = [
   {
@@ -110,7 +110,7 @@ export const gifts = [
   {
     "id": "B0D2QC5DFG",
     "name": "Muslin Swaddle Blankets for Newborn, 3 Pack Breathable Soft Receiving Blanket, Large 38 x 40 inches Swaddle Wrap Burping Clothes Diapers, Essentials Infant Shower Items, Toddler Gift (Gentle Colors)",
-    "price": "AED 70.00",
+    "price": "AED 78.00",
     "image": "assets/B0D2QC5DFG.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0D2QC5DFG/"
   },
@@ -229,7 +229,7 @@ export const gifts = [
   {
     "id": "B0B3SCY69X",
     "name": "Aveeno Baby Welcome Little One Gift Set, Baby Skincare Set with Nourishing Baby Body Wash & Shampoo, Calming Bath Wash, All Over Baby Wipes, Daily Moisturizing Lotion, & Baby Balm, 5 Items",
-    "price": "AED 144.55",
+    "price": "AED 143.19",
     "image": "assets/B0B3SCY69X.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0B3SCY69X/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 120.93",
+    "price": "AED 119.89",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
