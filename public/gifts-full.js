@@ -1,11 +1,11 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "5 Oct 2026";
+export const amazonPricesCheckedOn = "6 Oct 2026";
 
 export const gifts = [
   {
     "id": "B0C65Z31KS",
     "name": "Bumble & Bird - Diaper Pail - Nappy Disposal Bin - Anthracite - Odorless - Easy Refill - No Preset Bag Size",
-    "price": "AED 139.00",
+    "price": "AED 129.00",
     "image": "assets/B0C65Z31KS.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0C65Z31KS/"
   },
@@ -68,7 +68,7 @@ export const gifts = [
   {
     "id": "B08FB7TDMM",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers 3-8kg Size 2 Giant 108 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 75.21",
+    "price": "AED 69.02",
     "image": "assets/B08FB7TDMM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB7TDMM/"
   },
@@ -110,7 +110,7 @@ export const gifts = [
   {
     "id": "B0D2QC5DFG",
     "name": "Muslin Swaddle Blankets for Newborn, 3 Pack Breathable Soft Receiving Blanket, Large 38 x 40 inches Swaddle Wrap Burping Clothes Diapers, Essentials Infant Shower Items, Toddler Gift (Gentle Colors)",
-    "price": "AED 78.00",
+    "price": "AED 77.20",
     "image": "assets/B0D2QC5DFG.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0D2QC5DFG/"
   },
@@ -131,7 +131,7 @@ export const gifts = [
   {
     "id": "B0DP2QDBQZ",
     "name": "MairMore 2-Pack Muslin Baby Changing Pad Covers for Boys & Girls, 32\" x 16\" | 360° Full Elastic Fit, 100% Cotton, Soft & Breathable, Diaper Changing Pad Cover for Newborns & Infants (Pink Blossom)",
-    "price": "AED 89.36",
+    "price": "AED 85.96",
     "image": "assets/B0DP2QDBQZ.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0DP2QDBQZ/"
   },
@@ -166,7 +166,7 @@ export const gifts = [
   {
     "id": "B0DT4D8C8J",
     "name": "Baby Carrier Newborn to Toddler (Houndstooth)",
-    "price": "AED 148.00",
+    "price": "AED 160.00",
     "image": "assets/B0DT4D8C8J.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0DT4D8C8J/"
   },
@@ -264,7 +264,7 @@ export const gifts = [
   {
     "id": "B0BKGPXQXC",
     "name": "NUK Twist Bottle Brush for Thorough and Gentle Cleaning of Baby Bottles Includes Teat Brush 1 Piece",
-    "price": "AED 42.43",
+    "price": "AED 46.28",
     "image": "assets/B0BKGPXQXC.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0BKGPXQXC/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 117.83",
+    "price": "AED 120.93",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
