@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "6 Oct 2026";
+export const amazonPricesCheckedOn = "8 Oct 2026";
 
 export const gifts = [
   {
@@ -12,14 +12,14 @@ export const gifts = [
   {
     "id": "B001ABZGU2",
     "name": "Bright Starts Infant Toys, Piece of 1",
-    "price": "AED 29.00",
+    "price": "AED 35.71",
     "image": "assets/B001ABZGU2.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B001ABZGU2/"
   },
   {
     "id": "B09Y8WYDQF",
     "name": "Me Home Car Seat Toys Baby Hanging Toy With C-Clip Ring Stroller Crinkle For 0, 3, 6, 9, 12 Months Newborn Boys Girls Gifts - Giraffe",
-    "price": "AED 37.89",
+    "price": "AED 37.59",
     "image": "assets/B09Y8WYDQF.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09Y8WYDQF/"
   },
@@ -61,7 +61,7 @@ export const gifts = [
   {
     "id": "B0G4CKNNFV",
     "name": "SKY-TOUCH Crab Car Seat Toy for Babies - Multi-Sensory Infant Stroller Toy with Mirror, Bell, Rattles, Crinkle, Teether - Safe, Soft, Fun Activity Toy for 18 months+",
-    "price": "AED 23.31",
+    "price": "AED 25.01",
     "image": "assets/B0G4CKNNFV.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0G4CKNNFV/"
   },
@@ -89,7 +89,7 @@ export const gifts = [
   {
     "id": "B09VPQTJ14",
     "name": "DITTY BIRD Interactive Musical Toy | 100 Words for Baby and Toddler | Educational Talking Toy | Explore Baby First 100 Words | Electronic Early Development Toys for Toddlers 1-3.…",
-    "price": "AED 82.03",
+    "price": "AED 83.00",
     "image": "assets/B09VPQTJ14.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09VPQTJ14/"
   },
@@ -103,7 +103,7 @@ export const gifts = [
   {
     "id": "B0H6RKVKX2",
     "name": "2-Pack Muslin Nursing Pillow Covers,Soft & Adorable Nursing Covers for Breastfeeding Pillows, Slipcovers for Newborn Boys & Girls, Washable & Breathable (Brown, Sun)",
-    "price": "AED 53.99",
+    "price": "AED 48.59",
     "image": "assets/B0H6RKVKX2.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0H6RKVKX2/"
   },
@@ -145,7 +145,7 @@ export const gifts = [
   {
     "id": "B09ZYR9Z19",
     "name": "Dr. Brown's Dr. Brown's Fold & Freeze Bottle Tote, Breastfeeding Essential Cooler Bag, 6 Baby Bottles Milk Storage Black",
-    "price": "AED 109.22",
+    "price": "AED 91.70",
     "image": "assets/B09ZYR9Z19.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09ZYR9Z19/"
   },
@@ -278,14 +278,14 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 120.93",
+    "price": "AED 118.87",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
   {
     "id": "B08FB889NX",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers Size 2, 3-8kg, 84 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 58.50",
+    "price": "AED 53.19",
     "image": "assets/B08FB889NX.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB889NX/"
   },
@@ -306,7 +306,7 @@ export const gifts = [
   {
     "id": "B0866RV9SM",
     "name": "Dr. Brown's Infant-to-Toddler Training Toothbrush Set with Fluoride-Free Baby Toothpaste, Strawberry - Giraffe - 1.4oz - 0-3 years",
-    "price": "AED 50.83",
+    "price": "AED 54.00",
     "image": "assets/B0866RV9SM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0866RV9SM/"
   },
