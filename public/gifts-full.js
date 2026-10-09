@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "8 Oct 2026";
+export const amazonPricesCheckedOn = "9 Oct 2026";
 
 export const gifts = [
   {
@@ -12,7 +12,7 @@ export const gifts = [
   {
     "id": "B001ABZGU2",
     "name": "Bright Starts Infant Toys, Piece of 1",
-    "price": "AED 37.21",
+    "price": "AED 37.48",
     "image": "assets/B001ABZGU2.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B001ABZGU2/"
   },
@@ -68,7 +68,7 @@ export const gifts = [
   {
     "id": "B08FB7TDMM",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers 3-8kg Size 2 Giant 108 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 69.02",
+    "price": "AED 73.26",
     "image": "assets/B08FB7TDMM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB7TDMM/"
   },
@@ -131,7 +131,7 @@ export const gifts = [
   {
     "id": "B0DP2QDBQZ",
     "name": "MairMore 2-Pack Muslin Baby Changing Pad Covers for Boys & Girls, 32\" x 16\" | 360° Full Elastic Fit, 100% Cotton, Soft & Breathable, Diaper Changing Pad Cover for Newborns & Infants (Pink Blossom)",
-    "price": "AED 85.96",
+    "price": "AED 89.08",
     "image": "assets/B0DP2QDBQZ.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0DP2QDBQZ/"
   },
@@ -145,7 +145,7 @@ export const gifts = [
   {
     "id": "B09ZYR9Z19",
     "name": "Dr. Brown's Dr. Brown's Fold & Freeze Bottle Tote, Breastfeeding Essential Cooler Bag, 6 Baby Bottles Milk Storage Black",
-    "price": "AED 91.70",
+    "price": "AED 109.22",
     "image": "assets/B09ZYR9Z19.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09ZYR9Z19/"
   },
@@ -236,7 +236,7 @@ export const gifts = [
   {
     "id": "B0CD215RSL",
     "name": "NUK Baby Bottle Cleanser | Ideal for Cleaning Baby Bottles, Teats & Accessories | Fragrance Free | pH Neutral | 100% Recycled Bottle Pack | 2 x 500 ML",
-    "price": "AED 39.00",
+    "price": "AED 43.50",
     "image": "assets/B0CD215RSL.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0CD215RSL/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 115.98",
+    "price": "AED 116.00",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
