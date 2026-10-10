@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "9 Oct 2026";
+export const amazonPricesCheckedOn = "10 Oct 2026";
 
 export const gifts = [
   {
@@ -12,7 +12,7 @@ export const gifts = [
   {
     "id": "B001ABZGU2",
     "name": "Bright Starts Infant Toys, Piece of 1",
-    "price": "AED 37.48",
+    "price": "AED 37.19",
     "image": "assets/B001ABZGU2.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B001ABZGU2/"
   },
@@ -54,7 +54,7 @@ export const gifts = [
   {
     "id": "B0GMWQ65KN",
     "name": "REMASS Toddler Hooded Bath Towel - Organic Cotton Muslin 6-Layer Soft Towel for Baby & Toddlers, 25x51, Bunny & Mushroom, Toddler Towels with Hood",
-    "price": "AED 72.31",
+    "price": "AED 72.11",
     "image": "assets/B0GMWQ65KN.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0GMWQ65KN/"
   },
@@ -68,7 +68,7 @@ export const gifts = [
   {
     "id": "B08FB7TDMM",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers 3-8kg Size 2 Giant 108 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 73.26",
+    "price": "AED 67.22",
     "image": "assets/B08FB7TDMM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB7TDMM/"
   },
@@ -236,7 +236,7 @@ export const gifts = [
   {
     "id": "B0CD215RSL",
     "name": "NUK Baby Bottle Cleanser | Ideal for Cleaning Baby Bottles, Teats & Accessories | Fragrance Free | pH Neutral | 100% Recycled Bottle Pack | 2 x 500 ML",
-    "price": "AED 43.50",
+    "price": "AED 39.00",
     "image": "assets/B0CD215RSL.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0CD215RSL/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 116.00",
+    "price": "AED 114.86",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
@@ -327,7 +327,7 @@ export const gifts = [
   {
     "id": "B08FB9HJKD",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers 2-5kg Size 1 Mega 86 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 57.45",
+    "price": "AED 53.99",
     "image": "assets/B08FB9HJKD.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB9HJKD/"
   },
