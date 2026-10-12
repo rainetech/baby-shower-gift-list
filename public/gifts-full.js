@@ -19,7 +19,7 @@ export const gifts = [
   {
     "id": "B09Y8WYDQF",
     "name": "Me Home Car Seat Toys Baby Hanging Toy With C-Clip Ring Stroller Crinkle For 0, 3, 6, 9, 12 Months Newborn Boys Girls Gifts - Giraffe",
-    "price": "AED 37.59",
+    "price": "AED 36.59",
     "image": "assets/B09Y8WYDQF.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09Y8WYDQF/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 115.73",
+    "price": "AED 116.79",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
