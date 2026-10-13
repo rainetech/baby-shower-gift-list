@@ -1,18 +1,18 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "12 Oct 2026";
+export const amazonPricesCheckedOn = "13 Oct 2026";
 
 export const gifts = [
   {
     "id": "B0C65Z31KS",
     "name": "Bumble & Bird - Diaper Pail - Nappy Disposal Bin - Anthracite - Odorless - Easy Refill - No Preset Bag Size",
-    "price": "AED 129.00",
+    "price": "AED 139.00",
     "image": "assets/B0C65Z31KS.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0C65Z31KS/"
   },
   {
     "id": "B001ABZGU2",
     "name": "Bright Starts Infant Toys, Piece of 1",
-    "price": "AED 40.75",
+    "price": "AED 38.69",
     "image": "assets/B001ABZGU2.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B001ABZGU2/"
   },
@@ -187,7 +187,7 @@ export const gifts = [
   {
     "id": "B009X83YBM",
     "name": "Nuk 710393 Container for Milk Powder, Pack of 1",
-    "price": "AED 61.49",
+    "price": "AED 50.00",
     "image": "assets/B009X83YBM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B009X83YBM/"
   },
@@ -215,14 +215,14 @@ export const gifts = [
   {
     "id": "B07SKYWX5L",
     "name": "PandaEar Baby Silicone Soft Spoons| Training Feeding for Kids Toddlers Children and Infants| BPA Free 6 Pack| Great Gift Set |Gum-Friendly First Stage",
-    "price": "AED 26.99",
+    "price": "AED 24.28",
     "image": "assets/B07SKYWX5L.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B07SKYWX5L/"
   },
   {
     "id": "B0FKMTM5L8",
     "name": "PandaEar 3 Pack Stainless Steel Baby Suction Bowls, Non-Slip Child Food Bowl with Silicone Sleeve for Kids Toddlers Infants, Unbreakable & Mess Free (Pink White)",
-    "price": "AED 46.99",
+    "price": "AED 42.29",
     "image": "assets/B0FKMTM5L8.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0FKMTM5L8/"
   },
@@ -264,7 +264,7 @@ export const gifts = [
   {
     "id": "B0BKGPXQXC",
     "name": "NUK Twist Bottle Brush for Thorough and Gentle Cleaning of Baby Bottles Includes Teat Brush 1 Piece",
-    "price": "AED 46.28",
+    "price": "AED 39.00",
     "image": "assets/B0BKGPXQXC.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0BKGPXQXC/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 116.79",
+    "price": "AED 116.77",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
@@ -334,7 +334,7 @@ export const gifts = [
   {
     "id": "B07ZHSC38R",
     "name": "Johnson's Baby No More Tears Ultimate Clean Wipes, 12 Packs of 48 wipes, 576 Wipes, Touch of Jasmine Notes, pH Balanced",
-    "price": "AED 70.89",
+    "price": "AED 77.40",
     "image": "assets/B07ZHSC38R.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B07ZHSC38R/"
   }
