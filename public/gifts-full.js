@@ -12,7 +12,7 @@ export const gifts = [
   {
     "id": "B001ABZGU2",
     "name": "Bright Starts Infant Toys, Piece of 1",
-    "price": "AED 37.67",
+    "price": "AED 37.19",
     "image": "assets/B001ABZGU2.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B001ABZGU2/"
   },
@@ -68,7 +68,7 @@ export const gifts = [
   {
     "id": "B08FB7TDMM",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers 3-8kg Size 2 Giant 108 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 71.70",
+    "price": "AED 78.42",
     "image": "assets/B08FB7TDMM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB7TDMM/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 115.73",
+    "price": "AED 114.69",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
