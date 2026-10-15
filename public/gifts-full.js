@@ -68,7 +68,7 @@ export const gifts = [
   {
     "id": "B08FB7TDMM",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers 3-8kg Size 2 Giant 108 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 78.42",
+    "price": "AED 75.21",
     "image": "assets/B08FB7TDMM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB7TDMM/"
   },
@@ -187,7 +187,7 @@ export const gifts = [
   {
     "id": "B009X83YBM",
     "name": "Nuk 710393 Container for Milk Powder, Pack of 1",
-    "price": "AED 50.00",
+    "price": "AED 58.88",
     "image": "assets/B009X83YBM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B009X83YBM/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 119.91",
+    "price": "AED 117.81",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
