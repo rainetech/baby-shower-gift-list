@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "14 Oct 2026";
+export const amazonPricesCheckedOn = "15 Oct 2026";
 
 export const gifts = [
   {
@@ -243,7 +243,7 @@ export const gifts = [
   {
     "id": "B0030BEW96",
     "name": "Kids 2 Rattle and Teethe Teether Toy, Multi-Colour, 8836",
-    "price": "AED 19.00",
+    "price": "AED 18.70",
     "image": "assets/B0030BEW96.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0030BEW96/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 114.69",
+    "price": "AED 119.91",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
@@ -313,7 +313,7 @@ export const gifts = [
   {
     "id": "B09L4W8LKQ",
     "name": "FPVERA Baby Car Seat Toys: Activity Spiral Stroller Toy Infant Plush Hanging Carseat Toys with Ringing Bell, 0-12 Months Girls Boys Newborn for Crib Bar Bassinet Mobile（Bee）",
-    "price": "AED 28.84",
+    "price": "AED 27.99",
     "image": "assets/B09L4W8LKQ.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09L4W8LKQ/"
   },
