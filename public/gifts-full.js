@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "15 Oct 2026";
+export const amazonPricesCheckedOn = "16 Oct 2026";
 
 export const gifts = [
   {
@@ -12,7 +12,7 @@ export const gifts = [
   {
     "id": "B001ABZGU2",
     "name": "Bright Starts Infant Toys, Piece of 1",
-    "price": "AED 37.19",
+    "price": "AED 36.82",
     "image": "assets/B001ABZGU2.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B001ABZGU2/"
   },
@@ -131,7 +131,7 @@ export const gifts = [
   {
     "id": "B0DP2QDBQZ",
     "name": "MairMore 2-Pack Muslin Baby Changing Pad Covers for Boys & Girls, 32\" x 16\" | 360° Full Elastic Fit, 100% Cotton, Soft & Breathable, Diaper Changing Pad Cover for Newborns & Infants (Pink Blossom)",
-    "price": "AED 89.08",
+    "price": "AED 107.10",
     "image": "assets/B0DP2QDBQZ.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0DP2QDBQZ/"
   },
@@ -187,7 +187,7 @@ export const gifts = [
   {
     "id": "B009X83YBM",
     "name": "Nuk 710393 Container for Milk Powder, Pack of 1",
-    "price": "AED 58.88",
+    "price": "AED 58.73",
     "image": "assets/B009X83YBM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B009X83YBM/"
   },
@@ -264,7 +264,7 @@ export const gifts = [
   {
     "id": "B0BKGPXQXC",
     "name": "NUK Twist Bottle Brush for Thorough and Gentle Cleaning of Baby Bottles Includes Teat Brush 1 Piece",
-    "price": "AED 39.00",
+    "price": "AED 46.28",
     "image": "assets/B0BKGPXQXC.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0BKGPXQXC/"
   },
@@ -278,14 +278,14 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 117.81",
+    "price": "AED 115.75",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
   {
     "id": "B08FB889NX",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers Size 2, 3-8kg, 84 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 60.99",
+    "price": "AED 58.50",
     "image": "assets/B08FB889NX.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB889NX/"
   },
@@ -299,7 +299,7 @@ export const gifts = [
   {
     "id": "B0CNCK99NB",
     "name": "KeaBabies Baby Wrap Carrier - All in 1 Original Breathable Baby Sling, Lightweight,Hands Free Baby Carrier Sling, Baby Carrier Wrap, Baby Carriers for Newborn, Infant,Baby Wraps Carrier (Rhino Gray)",
-    "price": "AED 120.44",
+    "price": "AED 135.63",
     "image": "assets/B0CNCK99NB.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0CNCK99NB/"
   },
