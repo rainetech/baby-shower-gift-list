@@ -47,7 +47,7 @@ export const gifts = [
   {
     "id": "B0C6LG689Q",
     "name": "REMASS Hooded Towel Muslin Hooded Towel Made from Organic Cotton 6-Layer Cotton Bath Towel, Soft Bath Towels for Toddler Baby,Toddler Towels with Hood for Girl,1-5 Years Old Kids",
-    "price": "AED 81.33",
+    "price": "AED 107.69",
     "image": "assets/B0C6LG689Q.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0C6LG689Q/"
   },
@@ -166,7 +166,7 @@ export const gifts = [
   {
     "id": "B0DT4D8C8J",
     "name": "Baby Carrier Newborn to Toddler (Houndstooth)",
-    "price": "AED 160.00",
+    "price": "AED 219.00",
     "image": "assets/B0DT4D8C8J.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0DT4D8C8J/"
   },
@@ -257,7 +257,7 @@ export const gifts = [
   {
     "id": "B000NO0LB6",
     "name": "Tommee Tippee Essentials Baby BrUSh And Comb, 0 To 24 Months, White, Piece Of 2",
-    "price": "AED 10.00",
+    "price": "AED 21.40",
     "image": "assets/B000NO0LB6.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B000NO0LB6/"
   },
