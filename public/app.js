@@ -57,7 +57,14 @@ function priceValue(label) {
   return match ? Number(match[0].replaceAll(",", "")) : null;
 }
 
-const entries = gifts.map((gift, index) => ({ gift, index, amazonPrice: priceValue(gift.price) }));
+// Reserved gifts report no price, so the price filters and sorting can't reveal what a guest paid.
+const entries = gifts.map((gift, index) => ({
+  gift,
+  index,
+  get amazonPrice() {
+    return reservations.has(gift.id) ? null : priceValue(gift.price);
+  }
+}));
 
 function visibleEntries() {
   const band = PRICE_BANDS.find((candidate) => candidate.id === activeBand);
@@ -167,6 +174,7 @@ function startReservationListener() {
   const reservationsRef = collection(db, "registries", REGISTRY_ID, "reservations");
   stopListening = onSnapshot(reservationsRef, (snapshot) => {
     reservations = new Map(snapshot.docs.map((entry) => [entry.id, entry.data()]));
+    renderPriceFilter();
     renderGifts();
   }, () => {
     giftSummary.textContent = "Reservations are temporarily unavailable. Please refresh.";
