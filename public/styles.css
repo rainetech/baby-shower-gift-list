@@ -304,3 +304,4 @@ dialog::backdrop { background: rgba(69,54,59,.48); backdrop-filter: blur(4px); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+.reserved-heading { grid-column: 1 / -1; margin: 16px 0 0; color: var(--sage-dark); font-size: 1.1rem; }

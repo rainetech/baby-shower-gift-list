@@ -66,18 +66,24 @@ const entries = gifts.map((gift, index) => ({
   }
 }));
 
+// Two pools: gifts still available first, then reserved ones, each keeping the chosen order.
+function availableFirst(list) {
+  const isReserved = (entry) => reservations.has(entry.gift.id);
+  return [...list.filter((entry) => !isReserved(entry)), ...list.filter(isReserved)];
+}
+
 function visibleEntries() {
   const band = PRICE_BANDS.find((candidate) => candidate.id === activeBand);
   const matching = entries.filter((entry) => band.test(entry.amazonPrice));
-  if (activeSort === "default") return matching;
+  if (activeSort === "default") return availableFirst(matching);
 
   const direction = activeSort === "price-asc" ? 1 : -1;
-  return [...matching].sort((a, b) => {
+  return availableFirst([...matching].sort((a, b) => {
     if (a.amazonPrice === null || b.amazonPrice === null) {
       return (a.amazonPrice === null) - (b.amazonPrice === null) || a.index - b.index;
     }
     return (a.amazonPrice - b.amazonPrice) * direction || a.index - b.index;
-  });
+  }));
 }
 
 function renderPriceFilter() {
@@ -108,7 +114,15 @@ function renderGifts() {
   giftGrid.replaceChildren();
   const visible = visibleEntries();
 
+  let reservedHeadingShown = false;
   visible.forEach(({ gift }) => {
+    if (reservations.has(gift.id) && !reservedHeadingShown) {
+      reservedHeadingShown = true;
+      const heading = document.createElement("h2");
+      heading.className = "reserved-heading";
+      heading.textContent = "Already reserved";
+      giftGrid.append(heading);
+    }
     const fragment = giftTemplate.content.cloneNode(true);
     const card = fragment.querySelector(".gift-card");
     const image = fragment.querySelector("img");
