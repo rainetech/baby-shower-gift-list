@@ -130,6 +130,7 @@ function renderGifts() {
       card.classList.add("is-reserved");
       statusPill.textContent = "Reserved";
       reserveButton.remove();
+      fragment.querySelector(".price").remove();
       reservedBanner.hidden = false;
       reservedBanner.querySelector("strong").textContent = reservation.name;
     } else {
