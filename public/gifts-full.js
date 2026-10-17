@@ -187,7 +187,7 @@ export const gifts = [
   {
     "id": "B009X83YBM",
     "name": "Nuk 710393 Container for Milk Powder, Pack of 1",
-    "price": "AED 58.73",
+    "price": "AED 52.77",
     "image": "assets/B009X83YBM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B009X83YBM/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 116.58",
+    "price": "AED 113.98",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
