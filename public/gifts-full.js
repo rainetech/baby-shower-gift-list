@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "16 Oct 2026";
+export const amazonPricesCheckedOn = "17 Oct 2026";
 
 export const gifts = [
   {
@@ -278,14 +278,14 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 115.75",
+    "price": "AED 116.58",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
   {
     "id": "B08FB889NX",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers Size 2, 3-8kg, 84 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 58.50",
+    "price": "AED 60.02",
     "image": "assets/B08FB889NX.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB889NX/"
   },
@@ -306,7 +306,7 @@ export const gifts = [
   {
     "id": "B0866RV9SM",
     "name": "Dr. Brown's Infant-to-Toddler Training Toothbrush Set with Fluoride-Free Baby Toothpaste, Strawberry - Giraffe - 1.4oz - 0-3 years",
-    "price": "AED 54.00",
+    "price": "AED 50.95",
     "image": "assets/B0866RV9SM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0866RV9SM/"
   },
@@ -334,7 +334,7 @@ export const gifts = [
   {
     "id": "B07ZHSC38R",
     "name": "Johnson's Baby No More Tears Ultimate Clean Wipes, 12 Packs of 48 wipes, 576 Wipes, Touch of Jasmine Notes, pH Balanced",
-    "price": "AED 77.85",
+    "price": "AED 74.76",
     "image": "assets/B07ZHSC38R.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B07ZHSC38R/"
   }
