@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/fireba
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import { collection, doc, getFirestore, onSnapshot, serverTimestamp, setDoc } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 import { firebaseConfig, registryUserEmail } from "./firebase-config.js";
-import { amazonPricesCheckedOn, gifts } from "./gifts-full.js";
+import { amazonPricesCheckedOn, gifts } from "./gifts-full.js?v=20261017";
 
 const REGISTRY_ID = "rochelle-and-christopher";
 
