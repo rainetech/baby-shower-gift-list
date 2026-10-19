@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "18 Oct 2026";
+export const amazonPricesCheckedOn = "19 Oct 2026";
 
 export const gifts = [
   {
@@ -103,7 +103,7 @@ export const gifts = [
   {
     "id": "B0H6RKVKX2",
     "name": "2-Pack Muslin Nursing Pillow Covers,Soft & Adorable Nursing Covers for Breastfeeding Pillows, Slipcovers for Newborn Boys & Girls, Washable & Breathable (Brown, Sun)",
-    "price": "AED 48.59",
+    "price": "AED 53.99",
     "image": "assets/B0H6RKVKX2.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0H6RKVKX2/"
   },
@@ -131,7 +131,7 @@ export const gifts = [
   {
     "id": "B0DP2QDBQZ",
     "name": "MairMore 2-Pack Muslin Baby Changing Pad Covers for Boys & Girls, 32\" x 16\" | 360° Full Elastic Fit, 100% Cotton, Soft & Breathable, Diaper Changing Pad Cover for Newborns & Infants (Pink Blossom)",
-    "price": "AED 107.10",
+    "price": "AED 89.04",
     "image": "assets/B0DP2QDBQZ.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0DP2QDBQZ/"
   },
@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 110.15",
+    "price": "AED 111.20",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
