@@ -278,7 +278,7 @@ export const gifts = [
   {
     "id": "B09K4N1RPK",
     "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 111.20",
+    "price": "AED 107.97",
     "image": "assets/B09K4N1RPK.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
