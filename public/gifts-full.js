@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "19 Oct 2026";
+export const amazonPricesCheckedOn = "20 Oct 2026";
 
 export const gifts = [
   {
