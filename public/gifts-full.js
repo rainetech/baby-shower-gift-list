@@ -47,7 +47,7 @@ export const gifts = [
   {
     "id": "B0C6LG689Q",
     "name": "REMASS Hooded Towel Muslin Hooded Towel Made from Organic Cotton 6-Layer Cotton Bath Towel, Soft Bath Towels for Toddler Baby,Toddler Towels with Hood for Girl,1-5 Years Old Kids",
-    "price": "AED 107.69",
+    "price": "AED 107.68",
     "image": "assets/B0C6LG689Q.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0C6LG689Q/"
   },
@@ -68,7 +68,7 @@ export const gifts = [
   {
     "id": "B08FB7TDMM",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers 3-8kg Size 2 Giant 108 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 73.49",
+    "price": "AED 71.70",
     "image": "assets/B08FB7TDMM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB7TDMM/"
   },
