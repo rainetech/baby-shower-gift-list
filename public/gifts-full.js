@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "20 Oct 2026";
+export const amazonPricesCheckedOn = "21 Oct 2026";
 
 export const gifts = [
   {
@@ -180,7 +180,7 @@ export const gifts = [
   {
     "id": "B0DK1WJ82B",
     "name": "HASTHIP® 6 Pack Glass Food Storage Containers, 120ML Jars with Lids Maker Microwave Dishwasher Freezer Safe 100% Leak Proof for Seasonings, Jam, Soy Sauces(Multicolor)",
-    "price": "AED 45.99",
+    "price": "AED 39.09",
     "image": "assets/B0DK1WJ82B.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0DK1WJ82B/"
   },
@@ -285,7 +285,7 @@ export const gifts = [
   {
     "id": "B08FB889NX",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers Size 2, 3-8kg, 84 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 57.16",
+    "price": "AED 55.77",
     "image": "assets/B08FB889NX.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB889NX/"
   },
