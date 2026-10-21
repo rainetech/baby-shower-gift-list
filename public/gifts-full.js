@@ -164,13 +164,6 @@ export const gifts = [
     "amazonUrl": "https://www.amazon.ae/dp/B0DMF59KBX/"
   },
   {
-    "id": "B0DT4D8C8J",
-    "name": "Baby Carrier Newborn to Toddler (Houndstooth)",
-    "price": "AED 219.00",
-    "image": "assets/B0DT4D8C8J.jpg",
-    "amazonUrl": "https://www.amazon.ae/dp/B0DT4D8C8J/"
-  },
-  {
     "id": "B0DYX9SVCZ",
     "name": "Konjac Baby Sponge for Bathing, Cute Shapes Natural Kids Bath Sponges for Infants, Toddler Bath Time, Natural and Safe Plant-Based Konjac Baby Bath Toys, 3pc. Set: Butterfly, Ladybug, Star",
     "price": "AED 39.99",
@@ -274,13 +267,6 @@ export const gifts = [
     "price": "AED 126.00",
     "image": "assets/B09K4QVWZV.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09K4QVWZV/"
-  },
-  {
-    "id": "B09K4N1RPK",
-    "name": "NUK Smooth Flow Anti Colic Baby Bottle, 5 oz, 4 Pack, Pink Bunnies,4 Count (Pack of 1)",
-    "price": "AED 107.97",
-    "image": "assets/B09K4N1RPK.jpg",
-    "amazonUrl": "https://www.amazon.ae/dp/B09K4N1RPK/"
   },
   {
     "id": "B08FB889NX",
