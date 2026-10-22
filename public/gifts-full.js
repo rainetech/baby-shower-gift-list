@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "21 Oct 2026";
+export const amazonPricesCheckedOn = "22 Oct 2026";
 
 export const gifts = [
   {
@@ -131,7 +131,7 @@ export const gifts = [
   {
     "id": "B0DP2QDBQZ",
     "name": "MairMore 2-Pack Muslin Baby Changing Pad Covers for Boys & Girls, 32\" x 16\" | 360° Full Elastic Fit, 100% Cotton, Soft & Breathable, Diaper Changing Pad Cover for Newborns & Infants (Pink Blossom)",
-    "price": "AED 89.04",
+    "price": "AED 89.17",
     "image": "assets/B0DP2QDBQZ.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0DP2QDBQZ/"
   },
@@ -271,7 +271,7 @@ export const gifts = [
   {
     "id": "B08FB889NX",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers Size 2, 3-8kg, 84 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 55.77",
+    "price": "AED 56.97",
     "image": "assets/B08FB889NX.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB889NX/"
   },
