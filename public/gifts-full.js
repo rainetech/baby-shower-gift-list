@@ -68,7 +68,7 @@ export const gifts = [
   {
     "id": "B08FB7TDMM",
     "name": "Pampers Ultimate Comfort Premium Taped Diapers 3-8kg Size 2 Giant 108 Count | #1 trusted for newborns in UAE, Lotion with Aloe Vera + Vitamin E, Wetness Indicator, Dermatologically Accredited",
-    "price": "AED 71.70",
+    "price": "AED 73.25",
     "image": "assets/B08FB7TDMM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B08FB7TDMM/"
   },
