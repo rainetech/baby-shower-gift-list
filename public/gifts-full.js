@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "22 Oct 2026";
+export const amazonPricesCheckedOn = "23 Oct 2026";
 
 export const gifts = [
   {
@@ -47,7 +47,7 @@ export const gifts = [
   {
     "id": "B0C6LG689Q",
     "name": "REMASS Hooded Towel Muslin Hooded Towel Made from Organic Cotton 6-Layer Cotton Bath Towel, Soft Bath Towels for Toddler Baby,Toddler Towels with Hood for Girl,1-5 Years Old Kids",
-    "price": "AED 107.68",
+    "price": "AED 81.49",
     "image": "assets/B0C6LG689Q.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0C6LG689Q/"
   },
@@ -117,7 +117,7 @@ export const gifts = [
   {
     "id": "B09V3DMFSJ",
     "name": "The Moon Brand Bamboo Moms Feeding Pillow-45 x 55 x 18 cm: Ultimate Breastfeeding Support and Comfort for Mom and Baby - Hypoallergenic, , Perfect Newborn Essential- -Grey",
-    "price": "AED 85.00",
+    "price": "AED 76.50",
     "image": "assets/B09V3DMFSJ.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B09V3DMFSJ/"
   },
@@ -292,7 +292,7 @@ export const gifts = [
   {
     "id": "B0866RV9SM",
     "name": "Dr. Brown's Infant-to-Toddler Training Toothbrush Set with Fluoride-Free Baby Toothpaste, Strawberry - Giraffe - 1.4oz - 0-3 years",
-    "price": "AED 50.95",
+    "price": "AED 46.76",
     "image": "assets/B0866RV9SM.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0866RV9SM/"
   },
