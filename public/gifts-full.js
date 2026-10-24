@@ -1,5 +1,5 @@
 // Amazon prices are snapshots from the wishlist on this date; the site shows it in the footer.
-export const amazonPricesCheckedOn = "23 Oct 2026";
+export const amazonPricesCheckedOn = "24 Oct 2026";
 
 export const gifts = [
   {
@@ -54,7 +54,7 @@ export const gifts = [
   {
     "id": "B0GMWQ65KN",
     "name": "REMASS Toddler Hooded Bath Towel - Organic Cotton Muslin 6-Layer Soft Towel for Baby & Toddlers, 25x51, Bunny & Mushroom, Toddler Towels with Hood",
-    "price": "AED 72.00",
+    "price": "AED 71.61",
     "image": "assets/B0GMWQ65KN.jpg",
     "amazonUrl": "https://www.amazon.ae/dp/B0GMWQ65KN/"
   },
